@@ -1,0 +1,359 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id               String    @id @default(cuid())
+  name             String
+  email            String    @unique
+  passwordHash     String?
+  subscriptionTier String?
+  emailVerified    DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  emailVerification   EmailVerified?
+  passwordReset       PasswordReset?
+  courses             Course[]
+  usageEvents         UsageEvent[]
+  subscriptions       Subscription[]
+  paymentTransactions PaymentTransaction[]
+  paymentLogs         PaymentLog[]
+}
+
+model EmailVerified {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  code          String
+  codeExpiresAt DateTime
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([codeExpiresAt])
+  @@index([userId])
+}
+
+model PasswordReset {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  token     String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([userId])
+}
+
+model Course {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  files        File[]
+  studyNotes   StudyNote[]
+  flashcards   Flashcard[]
+  chatSessions ChatSession[]
+  generations  Generation[]
+
+  @@index([userId])
+}
+
+enum ProcessingStatus {
+  UPLOADED
+  PROCESSING
+  READY
+  FAILED
+}
+
+model File {
+  id               String           @id @default(cuid())
+  courseId         String
+  fileName         String
+  fileType         String
+  fileSize         Int
+  storageKey       String
+  processingStatus ProcessingStatus @default(UPLOADED)
+  processingError  String?
+  retryCount       Int              @default(0)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  course           Course             @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  extractedContent ExtractedContent[]
+  contentChunks    ContentChunk[]
+
+  @@index([courseId])
+  @@index([processingStatus])
+}
+
+model ExtractedContent {
+  id          String   @id @default(cuid())
+  fileId      String
+  rawText     String
+  cleanedText String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([fileId])
+}
+
+model ContentChunk {
+  id         String   @id @default(cuid())
+  fileId     String
+  text       String
+  pageNumber Int?
+  chunkIndex Int
+  charStart  Int?
+  charEnd    Int?
+  createdAt  DateTime @default(now())
+
+  file       File        @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  embeddings Embedding[]
+
+  @@unique([fileId, chunkIndex])
+  @@index([fileId])
+}
+
+model Embedding {
+  id        String   @id @default(cuid())
+  chunkId   String
+  provider  String
+  model     String
+  vector    Json?
+  createdAt DateTime @default(now())
+
+  chunk ContentChunk @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+
+  @@index([chunkId])
+}
+
+model StudyNote {
+  id        String   @id @default(cuid())
+  courseId  String
+  title     String
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([courseId])
+}
+
+enum FlashcardStatus {
+  NEW
+  REVIEWING
+  MASTERED
+}
+
+model Flashcard {
+  id        String          @id @default(cuid())
+  courseId  String
+  question  String
+  answer    String
+  status    FlashcardStatus @default(NEW)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([courseId])
+}
+
+model ChatSession {
+  id        String   @id @default(cuid())
+  courseId  String
+  createdAt DateTime @default(now())
+
+  course   Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@index([courseId])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  sessionId String
+  role      String
+  content   String
+  createdAt DateTime @default(now())
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+}
+
+enum GenerationType {
+  STUDY_NOTES
+  FLASHCARDS
+  CHAT_RESPONSE
+  EMBEDDINGS
+}
+
+enum GenerationStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Generation {
+  id            String           @id @default(cuid())
+  courseId      String
+  type          GenerationType
+  status        GenerationStatus @default(PENDING)
+  outputContent String?
+  errorMessage  String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([courseId])
+  @@index([status])
+}
+
+model UsageEvent {
+  id            String   @id @default(cuid())
+  userId        String
+  courseId      String?
+  eventType     String
+  quantity      Int
+  billingPeriod String
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([billingPeriod])
+}
+
+model Plan {
+  id                String   @id @default(cuid())
+  name              String
+  courseLimit       Int
+  uploadLimit       Int
+  aiGenerationLimit Int
+  chatMessageLimit  Int
+  storageLimit      Int
+  monthlyPrice      Int
+  yearlyPrice       Int?
+  currency          String
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  subscriptions       Subscription[]
+  paymentTransactions PaymentTransaction[]
+
+  @@index([name])
+}
+
+model Subscription {
+  id                     String    @id @default(cuid())
+  userId                 String
+  planId                 String
+  provider               String
+  providerCustomerId     String?
+  providerSubscriptionId String?
+  status                 String
+  cancelAtPeriodEnd      Boolean   @default(false)
+  currentPeriodStart     DateTime?
+  currentPeriodEnd       DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESSFUL
+  FAILED
+}
+
+model PaymentTransaction {
+  id                    String        @id @default(cuid())
+  userId                String
+  planId                String
+  amountMinor           Int
+  currency              String
+  interval              String
+  provider              String
+  providerReference     String        @unique
+  providerTransactionId String?
+  status                PaymentStatus @default(PENDING)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan Plan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  paymentLogs PaymentLog[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([providerReference])
+}
+
+enum BackgroundJobType {
+  SEND_VERIFICATION_EMAIL
+  SEND_WELCOME_EMAIL
+  SEND_PASSWORD_RESET_EMAIL
+  PROCESS_FILE
+}
+
+enum BackgroundJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model BackgroundJob {
+  id               String              @id @default(cuid())
+  type             BackgroundJobType
+  deduplicationKey String              @unique
+  payload          Json
+  status           BackgroundJobStatus @default(PENDING)
+  attemptCount     Int                 @default(0)
+  maximumAttempts  Int                 @default(3)
+  errorMessage     String?
+  scheduledAt      DateTime            @default(now())
+  completedAt      DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([status, scheduledAt])
+}
+
+model PaymentLog {
+  id            String   @id @default(cuid())
+  userId        String?
+  transactionId String?
+  event         String
+  message       String?
+  rawPayload    Json?
+  createdAt     DateTime @default(now())
+
+  user        User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  transaction PaymentTransaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  @@index([transactionId])
+  @@index([userId])
+  @@index([event])
+}

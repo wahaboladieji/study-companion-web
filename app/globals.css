@@ -1,0 +1,228 @@
+@import "tailwindcss";
+@import "../tokens.css";
+
+@theme inline {
+  --color-primary: var(--color-roles-primary-color-roles-primary);
+  --color-on-primary: var(--color-roles-primary-color-roles-on-primary);
+  --color-primary-container: var(--color-roles-primary-color-roles-primary-container);
+  --color-primary-container-light: var(--primitive-colors-primary-color-palette-primary98);
+  --color-on-primary-container: var(--color-roles-primary-color-roles-on-primary-container);
+  --color-secondary: var(--color-roles-secondary-color-roles-secondary);
+  --color-on-secondary: var(--color-roles-secondary-color-roles-on-secondary);
+  --color-tertiary: var(--color-roles-tertiary-color-roles-tertiary);
+  --color-surface: var(--color-roles-surface-color-roles-surfcace);
+  --color-on-surface: var(--color-roles-surface-color-roles-on-surface);
+  --color-surface-variant: var(--color-roles-surface-color-roles-surface-variant);
+  --color-on-surface-variant: var(--color-roles-surface-color-roles-on-surface-variant);
+  --color-outline: var(--color-roles-outline-color-roles-outline);
+  --color-outline-variant: var(--color-roles-outline-color-roles-outline-variant);
+  --color-error: var(--color-roles-error-color-roles-error);
+  --color-on-error: var(--color-roles-error-color-roles-on-error);
+  --color-error-container: var(--color-roles-error-color-roles-error-container);
+  --color-on-error-container: var(--color-roles-error-color-roles-on-error-container);
+  --color-success-container: #dcfce7;
+  --color-on-success-container: #166534;
+  --color-surface-lowest: var(--color-roles-surface-color-roles-surface-container-lowest);
+  --color-surface-container-high: var(--color-roles-surface-color-roles-surface-container-high);
+  --color-surface-container: var(--color-roles-surface-color-roles-surface-container);
+  --color-surface-container-low: var(--color-roles-surface-color-roles-surface-conatiner-low);
+  --color-inverse-surface: var(--color-roles-surface-color-roles-inverse-surface);
+  --color-inverse-on-surface: var(--color-roles-surface-color-roles-inverse-on-surface);
+
+  --shadow-soft: var(--effect-soft-shadow);
+  --shadow-medium: var(--effect-medium-shadow);
+  --shadow-hard: var(--effect-hard-shadow);
+}
+
+:root {
+  /* Mapping spacing unitless tokens to pixels */
+  --spacing-0: calc(var(--spacing-collection-space-0) * 1px);
+  --spacing-25: calc(var(--spacing-collection-space-25) * 1px);
+  --spacing-50: calc(var(--spacing-collection-space-50) * 1px);
+  --spacing-75: calc(var(--spacing-collection-space-75) * 1px);
+  --spacing-100: calc(var(--spacing-collection-space-100-base) * 1px);
+  --spacing-125: calc(var(--spacing-collection-space-125) * 1px);
+  --spacing-150: calc(var(--spacing-collection-space-150) * 1px);
+  --spacing-175: calc(var(--spacing-collection-space-175) * 1px);
+  --spacing-200: calc(var(--spacing-collection-space-200) * 1px);
+  --spacing-250: calc(var(--spacing-collection-space-250) * 1px);
+  --spacing-300: calc(var(--spacing-collection-space-300) * 1px);
+  --spacing-400: calc(var(--spacing-collection-space-400) * 1px);
+  --spacing-500: calc(var(--spacing-collection-space-500) * 1px);
+  --spacing-600: calc(var(--spacing-collection-space-600) * 1px);
+  --spacing-800: calc(var(--spacing-collection-space-800) * 1px);
+}
+
+body {
+  background: var(--color-roles-surface-color-roles-surfcace);
+  color: var(--color-roles-surface-color-roles-on-surface);
+  font-family: var(--font-dm-sans), sans-serif;
+}
+
+/* === SEMANTIC TYPOGRAPHY UTILITIES === */
+@utility text-display-large {
+  font-size: var(--typography-display-large-fontsize);
+  font-weight: var(--typography-display-large-fontweight);
+  letter-spacing: var(--typography-display-large-letterspacing);
+  line-height: var(--typography-display-large-lineheight);
+}
+
+@utility text-display-medium {
+  font-size: var(--typography-display-medium-fontsize);
+  font-weight: var(--typography-display-medium-fontweight);
+  letter-spacing: var(--typography-display-medium-letterspacing);
+  line-height: var(--typography-display-medium-lineheight);
+}
+
+@utility text-display-small {
+  font-size: var(--typography-display-small-fontsize);
+  font-weight: var(--typography-display-small-fontweight);
+  letter-spacing: var(--typography-display-small-letterspacing);
+  line-height: var(--typography-display-small-lineheight);
+}
+
+@utility text-headline-large {
+  font-family: var(--font-open-sans);
+  font-size: var(--typography-headline-large-fontsize);
+  font-weight: var(--typography-headline-large-fontweight);
+  letter-spacing: var(--typography-headline-large-letterspacing);
+  line-height: var(--typography-headline-large-lineheight);
+}
+
+@utility text-headline-medium {
+  font-family: var(--font-open-sans);
+  font-size: var(--typography-headline-medium-fontsize);
+  font-weight: var(--typography-headline-medium-fontweight);
+  letter-spacing: var(--typography-headline-medium-letterspacing);
+  line-height: var(--typography-headline-medium-lineheight);
+}
+
+@utility text-headline-small {
+  font-family: var(--font-open-sans);
+  font-size: var(--typography-headline-small-fontsize);
+  font-weight: var(--typography-headline-small-fontweight);
+  letter-spacing: var(--typography-headline-small-letterspacing);
+  line-height: var(--typography-headline-small-lineheight);
+}
+
+@utility text-title-large {
+  font-family: var(--font-open-sans);
+  font-size: var(--typography-title-large-fontsize);
+  font-weight: var(--typography-title-large-fontweight);
+  letter-spacing: var(--typography-title-large-letterspacing);
+  line-height: var(--typography-title-large-lineheight);
+}
+
+@utility text-title-medium {
+  font-family: var(--font-open-sans);
+  font-size: var(--typography-title-medium-fontsize);
+  font-weight: var(--typography-title-medium-fontweight);
+  letter-spacing: var(--typography-title-medium-letterspacing);
+  line-height: var(--typography-title-medium-lineheight);
+}
+
+@utility text-title-small {
+  font-family: var(--font-open-sans);
+  font-size: var(--typography-title-small-fontsize);
+  font-weight: var(--typography-title-small-fontweight);
+  letter-spacing: var(--typography-title-small-letterspacing);
+  line-height: var(--typography-title-small-lineheight);
+}
+
+@utility text-body-large {
+  font-size: var(--typography-body-large-fontsize);
+  font-weight: var(--typography-body-large-fontweight);
+  letter-spacing: var(--typography-body-large-letterspacing);
+  line-height: var(--typography-body-large-lineheight);
+}
+
+@utility text-body-medium {
+  font-size: var(--typography-body-medium-fontsize);
+  font-weight: var(--typography-body-medium-fontweight);
+  letter-spacing: var(--typography-body-medium-letterspacing);
+  line-height: var(--typography-body-medium-lineheight);
+}
+
+@utility text-body-small {
+  font-size: var(--typography-body-small-fontsize);
+  font-weight: var(--typography-body-small-fontweight);
+  letter-spacing: var(--typography-body-small-letterspacing);
+  line-height: var(--typography-body-small-lineheight);
+}
+
+@utility text-label-large {
+  font-size: var(--typography-label-large-fontsize);
+  font-weight: var(--typography-label-large-fontweight);
+  letter-spacing: var(--typography-label-large-letterspacing);
+  line-height: var(--typography-label-large-lineheight);
+}
+
+@utility text-label-medium {
+  font-size: var(--typography-label-medium-fontsize);
+  font-weight: var(--typography-label-medium-fontweight);
+  letter-spacing: var(--typography-label-medium-letterspacing);
+  line-height: var(--typography-label-medium-lineheight);
+}
+
+@utility text-label-small {
+  font-size: var(--typography-label-small-fontsize);
+  font-weight: var(--typography-label-small-fontweight);
+  letter-spacing: var(--typography-label-small-letterspacing);
+  line-height: var(--typography-label-small-lineheight);
+}
+
+@keyframes drawer-slide-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes backdrop-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-scale-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes dropdown-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--spacing-100) * -1)) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@utility animate-drawer-slide-in {
+  animation: drawer-slide-in 240ms ease-out;
+}
+
+@utility animate-backdrop-fade-in {
+  animation: backdrop-fade-in 240ms ease-out;
+}
+
+@utility animate-modal-scale-in {
+  animation: modal-scale-in 240ms ease-out;
+}
+
+@utility animate-dropdown-pop-in {
+  animation: dropdown-pop-in 160ms ease-out;
+}
