@@ -27,8 +27,18 @@ export async function ensureCsrfToken(): Promise<string> {
   const existing = cookieStore.get(CSRF_COOKIE)?.value;
 
   if (existing) {
-    const [raw] = existing.split("|");
-    if (raw) return raw;
+    const [raw, hash] = existing.split("|");
+    if (raw && hash) {
+      const expectedHash = signCsrfToken(raw);
+      const expectedBuf = Buffer.from(expectedHash);
+      const hashBuf = Buffer.from(hash);
+      if (
+        expectedBuf.length === hashBuf.length &&
+        timingSafeEqual(expectedBuf, hashBuf)
+      ) {
+        return raw;
+      }
+    }
   }
 
   const { raw, value } = createCsrfValue();

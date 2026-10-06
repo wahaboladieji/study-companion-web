@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Trash2, ArrowRight, UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ export function CourseCard({
   course: CourseCardData;
   courseOptions: { id: string; name: string }[];
 }) {
+  const router = useRouter();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [state, formAction, isPending] = useActionState<DeleteCourseFormState, FormData>(deleteCourseAction, null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -41,6 +43,16 @@ export function CourseCard({
       .then((data: { csrfToken?: string }) => setCsrfToken(data.csrfToken ?? null))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (state?.success) {
+      router.refresh();
+    }
+  }, [state?.success, router]);
+
+  if (state?.success) {
+    return null;
+  }
 
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.preventDefault();

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { objectStorage } from "@/lib/storage/object-storage";
-import { assertUsageAllowed, UsageLimitError, getCurrentBillingPeriod } from "@/services/usage";
+import { assertUsageAllowed, UsageLimitError, getCurrentBillingPeriod, invalidateUserUsageCache } from "@/services/usage";
+import { invalidateCourseCache } from "@/services/course";
 import { enqueueProcessFile } from "@/services/file-processing";
 import { triggerBackgroundWorker } from "@/services/background-jobs-worker";
 import {
@@ -9,6 +10,12 @@ import {
   sanitizeFileName,
   type UploadValidationResult,
 } from "@/lib/validations/upload";
+import {
+  assertRateLimit,
+  RateLimitError,
+  RATE_LIMIT_MESSAGE,
+  RATE_LIMITS,
+} from "@/services/rate-limit";
 
 export type UploadedFileResult = {
   id?: string;
@@ -23,6 +30,7 @@ export type UploadedFileResult = {
 export type CourseFileSummary = {
   id: string;
   fileName: string;
+  fileType: string;
   fileSize: number;
   processingStatus: string;
   createdAt: string;
@@ -47,6 +55,7 @@ export async function listCourseFiles(
     select: {
       id: true,
       fileName: true,
+      fileType: true,
       fileSize: true,
       processingStatus: true,
       createdAt: true,
@@ -56,6 +65,7 @@ export async function listCourseFiles(
   return files.map((file) => ({
     id: file.id,
     fileName: file.fileName,
+    fileType: file.fileType,
     fileSize: file.fileSize,
     processingStatus: file.processingStatus,
     createdAt: file.createdAt.toISOString(),
@@ -70,6 +80,22 @@ export async function uploadCourseFile(input: {
   size: number;
   bytes: Uint8Array;
 }): Promise<UploadedFileResult> {
+  try {
+    await assertRateLimit({
+      ...RATE_LIMITS.UPLOAD,
+      key: `user:${input.userId}`,
+    });
+  } catch (error) {
+    if (error instanceof RateLimitError) {
+      return {
+        fileName: sanitizeFileName(input.fileName),
+        duplicate: false,
+        error: RATE_LIMIT_MESSAGE,
+      };
+    }
+    throw error;
+  }
+
   const safeFileName = sanitizeFileName(input.fileName);
 
   const validation: UploadValidationResult = validateUploadFile(
@@ -181,8 +207,6 @@ export async function uploadCourseFile(input: {
         ],
       });
 
-      await enqueueProcessFile(tx, created.id);
-
       await tx.course.update({
         where: { id: course.id },
         data: { updatedAt: new Date() },
@@ -191,7 +215,8 @@ export async function uploadCourseFile(input: {
       return created;
     });
 
-    triggerBackgroundWorker();
+    await invalidateCourseCache(course.id);
+    await invalidateUserUsageCache(input.userId);
 
     return {
       id: file.id,
@@ -214,3 +239,50 @@ export async function uploadCourseFile(input: {
     };
   }
 }
+
+export async function deleteFile(
+  userId: string,
+  fileId: string
+): Promise<{ success: boolean; error?: string }> {
+  const file = await prisma.file.findFirst({
+    where: {
+      id: fileId,
+      course: { userId },
+    },
+    select: { id: true, storageKey: true, fileSize: true, courseId: true },
+  });
+
+  if (!file) {
+    return { success: false, error: "File not found." };
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.file.delete({ where: { id: file.id } });
+
+      await tx.usageEvent.create({
+        data: {
+          userId,
+          courseId: file.courseId,
+          eventType: "STORAGE_USED",
+          quantity: -file.fileSize,
+          billingPeriod: getCurrentBillingPeriod(),
+        },
+      });
+    });
+
+    await objectStorage.delete(file.storageKey).catch(() => undefined);
+
+    await invalidateCourseCache(file.courseId);
+    await invalidateUserUsageCache(userId);
+
+    return { success: true };
+  } catch (error) {
+    console.error(
+      "[UploadService] File deletion failed:",
+      error instanceof Error ? error.message : "Unknown error"
+    );
+    return { success: false, error: "Failed to delete the file. Please try again." };
+  }
+}
+

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { verifyTransaction } from "@/services/flutterwave";
+import {
+  assertRateLimit,
+  getClientIp,
+  RateLimitError,
+  RATE_LIMITS,
+} from "@/services/rate-limit";
 
 // Flutterwave sends the secret hash in the "verif-hash" header
 function verifyWebhookSignature(req: NextRequest): boolean {
@@ -11,6 +17,25 @@ function verifyWebhookSignature(req: NextRequest): boolean {
 }
 
 export async function POST(req: NextRequest) {
+  const ip = await getClientIp();
+  try {
+    await assertRateLimit({
+      ...RATE_LIMITS.FLUTTERWAVE_WEBHOOK,
+      key: `ip:${ip}`,
+    });
+  } catch (error) {
+    if (error instanceof RateLimitError) {
+      return NextResponse.json(
+        { error: "Too many requests" },
+        {
+          status: 429,
+          headers: { "Retry-After": String(error.retryAfterSeconds) },
+        }
+      );
+    }
+    throw error;
+  }
+
   const body = await req.json().catch(() => null);
   const txRef = body?.data?.tx_ref as string | undefined;
 
@@ -155,9 +180,24 @@ export async function POST(req: NextRequest) {
       orderBy: { createdAt: "desc" },
     });
 
-    let remainingMs = 0;
-    if (activeSub && activeSub.currentPeriodEnd && activeSub.currentPeriodEnd > new Date()) {
-      remainingMs = activeSub.currentPeriodEnd.getTime() - Date.now();
+    if (activeSub && activeSub.cancelAtPeriodEnd && activeSub.currentPeriodEnd && activeSub.currentPeriodEnd > new Date()) {
+      await tx.subscription.update({
+        where: { id: activeSub.id },
+        data: {
+          scheduledPlanId: transaction.planId,
+          scheduledInterval: transaction.interval,
+        },
+      });
+
+      await tx.paymentLog.create({
+        data: {
+          userId: transaction.userId,
+          transactionId: transaction.id,
+          event: "SUBSCRIPTION_SCHEDULED_VIA_WEBHOOK",
+          message: "Payment processed; new plan scheduled to activate after running plan ends",
+        },
+      });
+      return;
     }
 
     await tx.subscription.updateMany({
@@ -166,14 +206,12 @@ export async function POST(req: NextRequest) {
     });
 
     const periodStart = new Date();
-    const baseEnd = new Date(periodStart);
+    const periodEnd = new Date(periodStart);
     if (transaction.interval === "yearly") {
-      baseEnd.setFullYear(baseEnd.getFullYear() + 1);
+      periodEnd.setFullYear(periodEnd.getFullYear() + 1);
     } else {
-      baseEnd.setMonth(baseEnd.getMonth() + 1);
+      periodEnd.setMonth(periodEnd.getMonth() + 1);
     }
-
-    const periodEnd = new Date(baseEnd.getTime() + remainingMs);
 
     await tx.subscription.create({
       data: {
@@ -192,15 +230,12 @@ export async function POST(req: NextRequest) {
       data: { subscriptionTier: "PREMIUM" },
     });
 
-    const rolloverDays = Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
     await tx.paymentLog.create({
       data: {
         userId: transaction.userId,
         transactionId: transaction.id,
         event: "SUBSCRIPTION_FULFILLED",
-        message: rolloverDays > 0
-          ? `Subscription activated via webhook with ${rolloverDays} rollover days added from previous active plan`
-          : "Subscription created and user upgraded to PREMIUM via webhook",
+        message: "Subscription created and user upgraded to PREMIUM via webhook",
       },
     });
   });

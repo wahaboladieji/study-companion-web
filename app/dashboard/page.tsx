@@ -52,7 +52,6 @@ export default async function DashboardPage({
             triggerClassName="border border-outline-variant gap-[var(--spacing-75)] pl-[var(--spacing-150)]"
           />
           <CreateCourseDialog 
-            courses={courseOptions}
             triggerClassName="shrink-0 gap-[var(--spacing-75)] pl-[var(--spacing-150)]"
             triggerContent={
               <>
@@ -75,7 +74,6 @@ export default async function DashboardPage({
           </p>
           <div className="mt-[var(--spacing-400)]">
             <CreateCourseDialog 
-              courses={courseOptions}
               triggerContent="Create New Course"
             />
           </div>

@@ -68,7 +68,7 @@ export default async function DashboardLayout({
   return (
     <div className="flex min-h-screen bg-surface">
       {/* Sidebar */}
-      <aside aria-label="Sidebar" className="hidden w-64 flex-col border-r border-surface-container-low bg-surface-lowest md:flex">
+      <aside aria-label="Sidebar" className="hidden sticky top-0 h-screen w-64 flex-col border-r border-surface-container-low bg-surface-lowest md:flex">
         <div className="flex h-14 items-center border-b border-surface-container-low px-[var(--spacing-400)]">
           <Link href="/dashboard" className="flex items-center gap-[var(--spacing-100)]">
             <BrainCircuit className="h-6 w-6 text-primary" />

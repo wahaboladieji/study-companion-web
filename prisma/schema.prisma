@@ -359,3 +359,16 @@ model PaymentLog {
   @@index([userId])
   @@index([event])
 }
+
+model RateLimitEntry {
+  id          String   @id @default(cuid())
+  bucket      String
+  key         String
+  windowStart DateTime
+  count       Int      @default(1)
+  updatedAt   DateTime @updatedAt
+
+  @@unique([bucket, key, windowStart])
+  @@index([bucket, key])
+  @@index([windowStart])
+}

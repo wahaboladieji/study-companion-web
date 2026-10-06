@@ -4,6 +4,7 @@ import { createCourse, deleteCourse } from "@/services/course";
 import { getCurrentUser } from "@/services/auth";
 import { validateCsrfToken } from "@/services/csrf";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
 export type CreateCourseFormState = {
   error?: string;
@@ -71,6 +72,5 @@ export async function deleteCourseAction(
   }
 
   revalidatePath("/dashboard");
-
-  return { success: true };
+  redirect("/dashboard");
 }

@@ -21,6 +21,12 @@ import {
   FlutterwaveNotConfiguredError,
   verifyTransaction,
 } from "@/services/flutterwave";
+import {
+  assertRateLimit,
+  RateLimitError,
+  RATE_LIMIT_MESSAGE,
+  RATE_LIMITS,
+} from "@/services/rate-limit";
 
 export type CheckoutFormState = {
   error?: string;
@@ -56,6 +62,18 @@ export async function createCheckoutAction(
     return { error: AUTH_FAILURE };
   }
 
+  try {
+    await assertRateLimit({
+      ...RATE_LIMITS.CHECKOUT,
+      key: `user:${user.id}`,
+    });
+  } catch (error) {
+    if (error instanceof RateLimitError) {
+      return { error: RATE_LIMIT_MESSAGE };
+    }
+    throw error;
+  }
+
   const planId = formData.get("planId");
   const interval = formData.get("interval");
   if (
@@ -78,6 +96,26 @@ export async function createCheckoutAction(
 
   if (!isFlutterwaveConfigured()) {
     return { error: PAYMENTS_UNAVAILABLE };
+  }
+
+  const activeSub = await prisma.subscription.findFirst({
+    where: { userId: user.id, status: "ACTIVE" },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (
+    activeSub &&
+    activeSub.currentPeriodEnd &&
+    activeSub.currentPeriodEnd > new Date()
+  ) {
+    const endDateStr = activeSub.currentPeriodEnd.toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    return {
+      error: `You already have an active subscription running until ${endDateStr}. You can schedule a new plan to start when your current plan ends.`,
+    };
   }
 
   const reference = createTransactionReference();
@@ -185,6 +223,18 @@ export async function verifyPaymentAction(
   const user = await getCurrentUser();
   if (!user) {
     return { success: false, error: AUTH_FAILURE };
+  }
+
+  try {
+    await assertRateLimit({
+      ...RATE_LIMITS.PAYMENT_VERIFY,
+      key: `user:${user.id}`,
+    });
+  } catch (error) {
+    if (error instanceof RateLimitError) {
+      return { success: false, error: RATE_LIMIT_MESSAGE };
+    }
+    throw error;
   }
 
   if (!isFlutterwaveConfigured()) {
@@ -312,25 +362,35 @@ export async function verifyPaymentAction(
         orderBy: { createdAt: "desc" },
       });
 
-      let remainingMs = 0;
-      if (activeSub && activeSub.currentPeriodEnd && activeSub.currentPeriodEnd > new Date()) {
-        remainingMs = activeSub.currentPeriodEnd.getTime() - Date.now();
+      if (
+        activeSub &&
+        activeSub.cancelAtPeriodEnd &&
+        activeSub.currentPeriodEnd &&
+        activeSub.currentPeriodEnd > new Date()
+      ) {
+        await tx.subscription.update({
+          where: { id: activeSub.id },
+          data: {
+            scheduledPlanId: transaction.planId,
+            scheduledInterval: transaction.interval,
+          },
+        });
+
+        await tx.paymentLog.create({
+          data: {
+            userId: transaction.userId,
+            transactionId: transaction.id,
+            event: "SUBSCRIPTION_SCHEDULED_VIA_CALLBACK",
+            message: "Payment processed; new plan scheduled to activate after running plan ends",
+          },
+        });
+        return;
       }
 
       await tx.subscription.updateMany({
         where: { userId: transaction.userId, status: "ACTIVE" },
         data: { status: "CANCELLED" },
       });
-
-      const periodStart = new Date();
-      const baseEnd = new Date(periodStart);
-      if (transaction.interval === "yearly") {
-        baseEnd.setFullYear(baseEnd.getFullYear() + 1);
-      } else {
-        baseEnd.setMonth(baseEnd.getMonth() + 1);
-      }
-
-      const periodEnd = new Date(baseEnd.getTime() + remainingMs);
 
       await tx.subscription.create({
         data: {
@@ -349,15 +409,12 @@ export async function verifyPaymentAction(
         data: { subscriptionTier: "PREMIUM" },
       });
 
-      const rolloverDays = Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
       await tx.paymentLog.create({
         data: {
           userId: transaction.userId,
           transactionId: transaction.id,
           event: "SUBSCRIPTION_FULFILLED",
-          message: rolloverDays > 0
-            ? `Subscription activated via callback with ${rolloverDays} rollover days added from previous active plan`
-            : "Subscription created and user upgraded to PREMIUM via callback",
+          message: "Subscription created and user upgraded to PREMIUM via callback",
         },
       });
     });

@@ -35,7 +35,7 @@ export function UpgradeDialog({
   currentTier?: string | null;
   currentInterval?: SubscriptionInterval | null;
   cancelAtPeriodEnd?: boolean;
-  currentPeriodEnd?: string | null;
+  currentPeriodEnd?: Date | string | null;
   triggerContent?: React.ReactNode;
   triggerClassName?: string;
   open?: boolean;
@@ -48,9 +48,11 @@ export function UpgradeDialog({
   const [isCheckoutPending, setIsCheckoutPending] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
-  const [pendingCheckoutPlan, setPendingCheckoutPlan] = useState<{
+  const [pendingSchedulePlan, setPendingSchedulePlan] = useState<{
+    planId: string;
     interval: "monthly" | "yearly";
   } | null>(null);
+  const [isScheduling, setIsScheduling] = useState(false);
 
   const setIsOpen = useCallback(
     (next: boolean) => {
@@ -117,7 +119,7 @@ export function UpgradeDialog({
     if (!premium || !csrfToken) return;
 
     if (isPremiumCurrent && currentPeriodEnd) {
-      setPendingCheckoutPlan({ interval });
+      setPendingSchedulePlan({ planId: premium.id, interval });
       setCheckoutError(null);
       return;
     }
@@ -152,18 +154,33 @@ export function UpgradeDialog({
     }
   };
 
+  const confirmSchedulePlan = async () => {
+    if (!pendingSchedulePlan || !csrfToken) return;
+    setIsScheduling(true);
+    setCheckoutError(null);
+    try {
+      const result = await scheduleCheckoutAction({
+        planId: pendingSchedulePlan.planId,
+        interval: pendingSchedulePlan.interval,
+        csrfToken,
+      });
+      if (result.success) {
+        setPendingSchedulePlan(null);
+        setIsOpen(false);
+        router.refresh();
+      } else {
+        setCheckoutError(result.error ?? "Failed to schedule plan change.");
+      }
+    } catch {
+      setCheckoutError("Something went wrong while scheduling plan.");
+    } finally {
+      setIsScheduling(false);
+    }
+  };
+
   const endMs = currentPeriodEnd ? new Date(currentPeriodEnd).getTime() : Date.now();
   const remainingMs = Math.max(0, endMs - Date.now());
   const remainingDays = Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
-
-  const projectedStart = new Date();
-  const projectedBaseEnd = new Date(projectedStart);
-  if (pendingCheckoutPlan?.interval === "yearly") {
-    projectedBaseEnd.setFullYear(projectedBaseEnd.getFullYear() + 1);
-  } else {
-    projectedBaseEnd.setMonth(projectedBaseEnd.getMonth() + 1);
-  }
-  const projectedFinalEnd = new Date(projectedBaseEnd.getTime() + remainingMs);
 
   const formattedEndDate = currentPeriodEnd
     ? new Date(currentPeriodEnd).toLocaleDateString(undefined, {
@@ -194,7 +211,7 @@ export function UpgradeDialog({
         <div className="fixed inset-0 z-50">
           {/* Backdrop */}
           <div
-            className="fixed inset-0 animate-backdrop-fade-in bg-inverse-surface/80 backdrop-blur-sm"
+            className="fixed inset-0 bg-inverse-surface/80 backdrop-blur-sm"
             aria-hidden="true"
             onClick={() => setIsOpen(false)}
           />
@@ -206,7 +223,7 @@ export function UpgradeDialog({
             role="dialog"
             aria-modal="true"
             aria-labelledby="upgrade-dialog-title"
-            className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[440px] animate-modal-scale-in -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-surface-container-high bg-surface-lowest shadow-hard outline-none"
+            className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[440px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-surface-container-high bg-surface-lowest shadow-hard outline-none"
           >
             {/* Top accent stripe */}
             <div className="h-[3px] w-full bg-primary" />
@@ -262,119 +279,154 @@ export function UpgradeDialog({
                   {/* ── Divider ── */}
                   <div className="mb-[var(--spacing-300)] border-t border-surface-container-low" />
 
-                  {/* ── Interactive Rollover Notice Card or Plan Cards ── */}
-                  {pendingCheckoutPlan ? (
-                    <div className="rounded-xl border border-primary/30 bg-primary/5 p-[var(--spacing-400)] space-y-[var(--spacing-300)] animate-fade-in">
-                      <div className="flex items-center gap-[var(--spacing-200)] text-primary">
-                        <Sparkles className="h-5 w-5 shrink-0" aria-hidden="true" />
-                        <h4 className="text-label-large font-bold text-on-surface">
-                          {currentInterval === "monthly" && pendingCheckoutPlan.interval === "yearly"
-                            ? "Upgrade to Yearly & Rollover Days"
-                            : currentInterval === "yearly" && pendingCheckoutPlan.interval === "monthly"
-                              ? "Switch to Monthly & Rollover Days"
-                              : "Renew Plan & Rollover Days"}
-                        </h4>
-                      </div>
-
-                      <div className="space-y-[var(--spacing-150)] text-body-small text-on-surface-variant">
-                        <div className="flex justify-between border-b border-surface-container-low pb-[var(--spacing-100)]">
-                          <span>Currently active plan:</span>
-                          <span className="font-semibold text-on-surface">{premium.name} ({currentInterval ?? "Active"})</span>
-                        </div>
-                        {remainingDays > 0 && (
-                          <div className="flex justify-between border-b border-surface-container-low pb-[var(--spacing-100)]">
-                            <span>Days remaining to roll over:</span>
-                            <span className="font-semibold text-primary">{remainingDays} days</span>
-                          </div>
-                        )}
-                        <div className="flex justify-between border-b border-surface-container-low pb-[var(--spacing-100)]">
-                          <span>New plan starting today:</span>
-                          <span className="font-semibold text-on-surface">{premium.name} ({pendingCheckoutPlan.interval === "yearly" ? "Yearly" : "Monthly"})</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>New access until date:</span>
-                          <span className="font-semibold text-primary">{formatDate(projectedFinalEnd.toISOString())}</span>
-                        </div>
-                      </div>
-
-                      <p className="text-body-small text-outline">
-                        {remainingDays > 0 ? (
-                          <>Your remaining <strong>{remainingDays} days</strong> will not be forfeited. They will be added directly onto your new plan duration.</>
-                        ) : (
-                          <>Your new plan starts immediately with full access features.</>
-                        )}
-                      </p>
-
-                      <div className="flex flex-col sm:flex-row gap-[var(--spacing-150)] pt-[var(--spacing-100)]">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="flex-1"
-                          disabled={isCheckoutPending}
-                          onClick={() => setPendingCheckoutPlan(null)}
-                        >
-                          Back
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="primary"
-                          className="flex-1"
-                          disabled={isCheckoutPending}
-                          onClick={() => goToCheckout(pendingCheckoutPlan.interval)}
-                        >
-                          {isCheckoutPending ? "Redirecting..." : "Proceed to Checkout"}
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 gap-[var(--spacing-200)]">
-                      <PlanCard
-                        label="Monthly"
-                        priceLabel={formatMoneyMinor(premium.monthlyPriceMinor, premium.currency)}
-                        perLabel="per month"
-                        isCurrent={isPremiumCurrent && currentInterval === "monthly"}
-                        isLoading={isCheckoutPending}
-                        action={getPlanAction("monthly")}
-                        onAction={() => handlePlanSelection("monthly")}
-                      />
-                      <PlanCard
-                        label="Yearly"
-                        priceLabel={
-                          premium.yearlyPriceMinor === null
-                            ? null
-                            : formatMoneyMinor(premium.yearlyPriceMinor, premium.currency)
-                        }
-                        perLabel="per year"
-                        badge={premium.yearlyPriceMinor === null ? undefined : badgeText}
-                        isCurrent={isPremiumCurrent && currentInterval === "yearly"}
-                        isLoading={isCheckoutPending}
-                        action={premium.yearlyPriceMinor === null ? null : getPlanAction("yearly")}
-                        onAction={() => handlePlanSelection("yearly")}
-                      />
-                    </div>
-                  )}
-                  
-                  {checkoutError && (
-                    <div className="mt-[var(--spacing-300)] rounded-md bg-error-container p-[var(--spacing-200)] text-center text-body-medium text-on-error-container" role="alert">
-                      {checkoutError}
-                    </div>
-                  )}
-
-                  {/* ── Footer note ── */}
-                  <p className="mt-[var(--spacing-300)] text-center text-label-small text-outline">
-                    Cancel or switch anytime · Secure checkout via Flutterwave
-                  </p>
+                  {/* ── Billing plan cards ── */}
+                  <div className="grid grid-cols-2 gap-[var(--spacing-200)]">
+                    <PlanCard
+                      label="Monthly"
+                      priceLabel={formatMoneyMinor(premium.monthlyPriceMinor, premium.currency)}
+                      perLabel="per month"
+                      isCurrent={isPremiumCurrent && currentInterval === "monthly"}
+                      isLoading={isCheckoutPending}
+                      action={getPlanAction("monthly")}
+                      onAction={() => handlePlanSelection("monthly")}
+                    />
+                    <PlanCard
+                      label="Yearly"
+                      priceLabel={
+                        premium.yearlyPriceMinor === null
+                          ? null
+                          : formatMoneyMinor(premium.yearlyPriceMinor, premium.currency)
+                      }
+                      perLabel="per year"
+                      badge={premium.yearlyPriceMinor === null ? undefined : badgeText}
+                      isCurrent={isPremiumCurrent && currentInterval === "yearly"}
+                      isLoading={isCheckoutPending}
+                      action={premium.yearlyPriceMinor === null ? null : getPlanAction("yearly")}
+                      onAction={() => handlePlanSelection("yearly")}
+                    />
+                  </div>
                 </>
               ) : (
-                <p
+                <div
                   className="rounded-xl border border-surface-container-high bg-surface px-[var(--spacing-400)] py-[var(--spacing-300)] text-body-small text-on-surface-variant"
                   role="status"
                 >
                   Premium plans are being set up. Please check back soon.
-                </p>
+                </div>
+              )}
+
+              {checkoutError && (
+                <div className="mt-[var(--spacing-300)] rounded-md bg-error-container p-[var(--spacing-200)] text-center text-body-medium text-on-error-container" role="alert">
+                  {checkoutError}
+                </div>
               )}
             </div>
           </div>
+
+          {/* ── Stacked Pop-up Modal for Schedule Plan Confirmation ── */}
+          {pendingSchedulePlan && premium && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center p-[var(--spacing-400)]">
+              {/* Backdrop */}
+              <div
+                className="fixed inset-0 bg-inverse-surface/60 backdrop-blur-xs"
+                aria-hidden="true"
+                onClick={() => setPendingSchedulePlan(null)}
+              />
+
+              {/* Modal Card */}
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="upgrade-schedule-modal-title"
+                className="relative z-10 w-full max-w-[400px] overflow-hidden rounded-2xl border border-surface-container-high bg-surface-lowest shadow-hard outline-none"
+              >
+                {/* Accent bar */}
+                <div className="h-[3px] w-full bg-primary" />
+
+                {/* Header */}
+                <div className="flex items-center justify-between px-[var(--spacing-400)] pt-[var(--spacing-300)] pb-[var(--spacing-200)]">
+                  <div className="flex items-center gap-[var(--spacing-200)]">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary-container text-on-primary-container">
+                      <CalendarCheck className="h-4 w-4" aria-hidden="true" />
+                    </div>
+                    <h3
+                      id="upgrade-schedule-modal-title"
+                      className="text-title-small font-semibold text-on-surface"
+                    >
+                      Confirm Plan Schedule
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPendingSchedulePlan(null)}
+                    className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface"
+                    aria-label="Close modal"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div className="border-t border-surface-container-low" />
+
+                {/* Body */}
+                <div className="p-[var(--spacing-400)] space-y-[var(--spacing-300)]">
+                  {/* Compact info summary */}
+                  <div className="rounded-xl border border-surface-container-high bg-surface-container-lowest p-[var(--spacing-250)] space-y-[var(--spacing-150)] text-body-small">
+                    <div className="flex items-center justify-between">
+                      <span className="text-outline">Running plan:</span>
+                      <span className="font-semibold text-on-surface">
+                        {premium.name} ({currentInterval ?? "Active"})
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-outline">Active until:</span>
+                      <span className="font-medium text-on-surface">
+                        {formattedEndDate}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-surface-container-low pt-[var(--spacing-150)]">
+                      <span className="text-outline">New scheduled plan:</span>
+                      <span className="font-bold text-primary">
+                        {premium.name} ({pendingSchedulePlan.interval === "yearly" ? "Yearly" : "Monthly"})
+                      </span>
+                    </div>
+                  </div>
+
+                  <p className="text-body-small text-outline leading-relaxed">
+                    Your current plan stays active until {formattedEndDate}. No double charge will occur today.
+                  </p>
+
+                  {checkoutError && (
+                    <p className="text-body-small text-error" role="alert">
+                      {checkoutError}
+                    </p>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-[var(--spacing-200)] pt-[var(--spacing-100)]">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="flex-1"
+                      disabled={isScheduling}
+                      onClick={() => setPendingSchedulePlan(null)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      className="flex-1"
+                      disabled={isScheduling}
+                      onClick={confirmSchedulePlan}
+                    >
+                      {isScheduling ? "Scheduling..." : "Approve Schedule"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </>

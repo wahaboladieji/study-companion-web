@@ -2,17 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CreditCard, Loader2, X, Sparkles } from "lucide-react";
+import { CreditCard, Loader2, X, CalendarCheck, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatMoneyMinor } from "@/lib/money";
 import { PlanCard } from "@/components/dashboard/plan-card";
 import {
-  createCheckoutAction,
   cancelSubscriptionAction,
+  clearScheduledChangeAction,
+  createCheckoutAction,
   getBillingOverviewAction,
   resumeSubscriptionAction,
   scheduleCheckoutAction,
-  clearScheduledChangeAction,
 } from "@/app/actions/billing";
 import type { BillingOverview } from "@/services/billing";
 
@@ -66,9 +66,22 @@ export function BillingModal({
   const [isCheckoutPending, setIsCheckoutPending] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
-  const [pendingCheckoutPlan, setPendingCheckoutPlan] = useState<{
+  const [pendingSchedulePlan, setPendingSchedulePlan] = useState<{
+    planId: string;
     interval: "monthly" | "yearly";
   } | null>(null);
+  const [isScheduling, setIsScheduling] = useState(false);
+  const [isClearingScheduled, setIsClearingScheduled] = useState(false);
+
+  const [statusBanner, setStatusBanner] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!statusBanner) return;
+    const timer = setTimeout(() => {
+      setStatusBanner(null);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [statusBanner]);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -115,11 +128,17 @@ export function BillingModal({
     if (!open) return;
     panelRef.current?.focus();
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onOpenChange(false);
+      if (e.key === "Escape") {
+        if (pendingSchedulePlan) {
+          setPendingSchedulePlan(null);
+        } else {
+          onOpenChange(false);
+        }
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onOpenChange]);
+  }, [open, onOpenChange, pendingSchedulePlan]);
 
   const premium = overview?.plans.premium ?? null;
   const isPremium = overview?.subscription != null;
@@ -128,17 +147,6 @@ export function BillingModal({
   const cancelDateText = subscription?.currentPeriodEnd
     ? formatDate(subscription.currentPeriodEnd)
     : "the end of your billing period";
-
-  const premiumName = premium
-    ? premium.name.charAt(0).toUpperCase() + premium.name.slice(1).toLowerCase()
-    : "Premium";
-  const intervalText = currentInterval === "yearly" ? "Yearly" : "Monthly";
-  const aiGenerationRow = premium?.benefits.find(
-    (benefit) => benefit.label === "AI generations per month"
-  );
-  const creditsText = `${
-    isPremium ? aiGenerationRow?.premiumValue : aiGenerationRow?.freeValue ?? "—"
-  } AI generations / month`;
 
   const monthlyPrice = premium?.monthlyPriceMinor ?? 0;
   const yearlyPrice = premium?.yearlyPriceMinor ?? 0;
@@ -158,11 +166,22 @@ export function BillingModal({
     return null;
   };
 
+  const premiumName = premium
+    ? premium.name.charAt(0).toUpperCase() + premium.name.slice(1).toLowerCase()
+    : "Premium";
+  const intervalText = currentInterval === "yearly" ? "Yearly" : "Monthly";
+  const aiGenerationRow = premium?.benefits.find(
+    (benefit) => benefit.label === "AI generations per month"
+  );
+  const creditsText = `${
+    isPremium ? aiGenerationRow?.premiumValue : aiGenerationRow?.freeValue ?? "—"
+  } AI generations / month`;
+
   const handlePlanSelection = (interval: "monthly" | "yearly") => {
     if (!premium || !csrfToken) return;
 
-    if (isPremium && subscription?.currentPeriodEnd) {
-      setPendingCheckoutPlan({ interval });
+    if (isPremium) {
+      setPendingSchedulePlan({ planId: premium.id, interval });
       setCheckoutError(null);
       return;
     }
@@ -197,18 +216,55 @@ export function BillingModal({
     }
   };
 
-  const endMs = subscription?.currentPeriodEnd ? new Date(subscription.currentPeriodEnd).getTime() : Date.now();
-  const remainingMs = Math.max(0, endMs - Date.now());
-  const remainingDays = Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
+  const confirmSchedulePlan = async () => {
+    if (!pendingSchedulePlan || !csrfToken) return;
+    setIsScheduling(true);
+    setCheckoutError(null);
+    const targetIntervalLabel = pendingSchedulePlan.interval === "yearly" ? "Yearly" : "Monthly";
+    const scheduledDateStr = formatDate(subscription?.currentPeriodEnd ?? null);
 
-  const projectedStart = new Date();
-  const projectedBaseEnd = new Date(projectedStart);
-  if (pendingCheckoutPlan?.interval === "yearly") {
-    projectedBaseEnd.setFullYear(projectedBaseEnd.getFullYear() + 1);
-  } else {
-    projectedBaseEnd.setMonth(projectedBaseEnd.getMonth() + 1);
-  }
-  const projectedFinalEnd = new Date(projectedBaseEnd.getTime() + remainingMs);
+    try {
+      const result = await scheduleCheckoutAction({
+        planId: pendingSchedulePlan.planId,
+        interval: pendingSchedulePlan.interval,
+        csrfToken,
+      });
+      if (result.success) {
+        setPendingSchedulePlan(null);
+        await loadData();
+        setStatusBanner(
+          `You have successfully scheduled your new plan (${premiumName} ${targetIntervalLabel}) for activation on ${scheduledDateStr}.`
+        );
+        router.refresh();
+      } else {
+        setCheckoutError(result.error ?? "Failed to schedule plan change.");
+      }
+    } catch {
+      setCheckoutError("Something went wrong while scheduling plan.");
+    } finally {
+      setIsScheduling(false);
+    }
+  };
+
+  const handleClearScheduled = async () => {
+    if (!csrfToken) return;
+    setIsClearingScheduled(true);
+    setCancelError(null);
+    try {
+      const result = await clearScheduledChangeAction({ csrfToken });
+      if (result.success) {
+        await loadData();
+        setStatusBanner("You have successfully removed your scheduled plan change.");
+        router.refresh();
+      } else {
+        setCancelError(result.error ?? "Could not clear scheduled plan.");
+      }
+    } catch {
+      setCancelError("Something went wrong. Please try again.");
+    } finally {
+      setIsClearingScheduled(false);
+    }
+  };
 
   const handleCancel = async () => {
     if (!csrfToken) {
@@ -222,6 +278,9 @@ export function BillingModal({
       if (result.success) {
         setConfirmCancel(false);
         await loadData();
+        setStatusBanner(
+          `You have successfully canceled your subscription. You maintain full access until ${cancelDateText}.`
+        );
         router.refresh();
       } else {
         setCancelError(result.error ?? "We could not cancel your subscription. Please try again.");
@@ -246,6 +305,7 @@ export function BillingModal({
         setCancelError(result.error ?? "We could not resume your subscription. Please try again.");
       } else {
         await loadData();
+        setStatusBanner("You have successfully restored your subscription auto-renewal.");
         router.refresh();
       }
     } catch {
@@ -261,9 +321,8 @@ export function BillingModal({
         <div className="fixed inset-0 z-50">
           {/* Backdrop */}
           <div
-            className="fixed inset-0 animate-backdrop-fade-in bg-inverse-surface/80 backdrop-blur-sm"
+            className="fixed inset-0 bg-inverse-surface/80 backdrop-blur-sm"
             aria-hidden="true"
-            onClick={() => onOpenChange(false)}
           />
 
           {/* Panel */}
@@ -273,7 +332,7 @@ export function BillingModal({
             role="dialog"
             aria-modal="true"
             aria-labelledby="billing-modal-title"
-            className="fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[calc(100%-2rem)] max-w-[480px] animate-modal-scale-in -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-surface-container-high bg-surface-lowest shadow-hard outline-none"
+            className="fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[calc(100%-2rem)] max-w-[480px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-surface-container-high bg-surface-lowest shadow-hard outline-none"
           >
             <div className="h-[3px] w-full bg-primary" />
 
@@ -340,6 +399,27 @@ export function BillingModal({
                 </p>
               ) : (
                 <>
+                  {/* Status Banner */}
+                  {statusBanner && (
+                    <div
+                      role="status"
+                      className="mb-[var(--spacing-300)] flex items-center justify-between gap-[var(--spacing-200)] rounded-xl border border-primary/20 bg-primary/10 px-[var(--spacing-300)] py-[var(--spacing-200)] text-body-small text-on-surface shadow-sm animate-fade-in"
+                    >
+                      <div className="flex items-center gap-[var(--spacing-200)]">
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                        <span className="font-medium text-on-surface">{statusBanner}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setStatusBanner(null)}
+                        className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-primary/20 hover:text-on-surface focus-visible:outline-none"
+                        aria-label="Dismiss message"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
+
                   {/* Current plan */}
                   <section
                     aria-labelledby="billing-current-plan-heading"
@@ -355,30 +435,25 @@ export function BillingModal({
                     <div className="overflow-hidden rounded-xl border border-surface-container-high">
                       <InfoRow
                         label="Current plan"
-                        value={
-                          isPremium ? (
-                            <span className="inline-flex items-center gap-[var(--spacing-150)]">
-                              {premiumName}
-                              {subscription?.cancelAtPeriodEnd && (
-                                <span className="rounded-full bg-error-container/50 px-[var(--spacing-150)] py-[var(--spacing-25)] text-label-small font-semibold text-error">
-                                  Canceled
-                                </span>
-                              )}
-                            </span>
-                          ) : (
-                            "Free"
-                          )
-                        }
+                        value={isPremium ? premiumName : "Free"}
                       />
                       <InfoRow label="Credits" value={creditsText} />
                       <InfoRow
                         label="Subscription"
                         value={
-                          isPremium
-                            ? subscription?.cancelAtPeriodEnd
-                              ? `Canceled · ${intervalText}`
-                              : `Active · ${intervalText}`
-                            : "—"
+                          isPremium ? (
+                            subscription?.cancelAtPeriodEnd ? (
+                              <span className="inline-flex items-center gap-[var(--spacing-75)]">
+                                <span className="text-outline font-medium">Canceled</span>
+                                <span className="text-outline-variant">·</span>
+                                <span>{intervalText}</span>
+                              </span>
+                            ) : (
+                              `Active · ${intervalText}`
+                            )
+                          ) : (
+                            "—"
+                          )
                         }
                         action={
                           isPremium && subscription?.cancelAtPeriodEnd ? (
@@ -401,6 +476,22 @@ export function BillingModal({
                             : "—"
                         }
                       />
+                      {subscription?.scheduledPlanName && (
+                        <InfoRow
+                          label="Next plan"
+                          value={`${subscription.scheduledPlanName} (${subscription.scheduledInterval === "yearly" ? "Yearly" : "Monthly"})`}
+                          action={
+                            <button
+                              type="button"
+                              className="text-label-small font-semibold text-error transition-colors hover:underline disabled:opacity-50"
+                              disabled={isClearingScheduled}
+                              onClick={handleClearScheduled}
+                            >
+                              {isClearingScheduled ? "Clearing..." : "Remove"}
+                            </button>
+                          }
+                        />
+                      )}
                     </div>
 
                     {cancelError && (
@@ -422,104 +513,33 @@ export function BillingModal({
                       {isPremium ? "Change billing period" : "Upgrade to Premium"}
                     </h3>
 
-                    {pendingCheckoutPlan ? (
-                      <div className="rounded-xl border border-primary/30 bg-primary/5 p-[var(--spacing-400)] space-y-[var(--spacing-300)] animate-fade-in">
-                        <div className="flex items-center gap-[var(--spacing-200)] text-primary">
-                          <Sparkles className="h-5 w-5 shrink-0" aria-hidden="true" />
-                          <h4 className="text-label-large font-bold text-on-surface">
-                            {currentInterval === "monthly" && pendingCheckoutPlan.interval === "yearly"
-                              ? "Upgrade to Yearly & Rollover Days"
-                              : currentInterval === "yearly" && pendingCheckoutPlan.interval === "monthly"
-                                ? "Switch to Monthly & Rollover Days"
-                                : "Renew Plan & Rollover Days"}
-                          </h4>
-                        </div>
-
-                        <div className="space-y-[var(--spacing-150)] text-body-small text-on-surface-variant">
-                          <div className="flex justify-between border-b border-surface-container-low pb-[var(--spacing-100)]">
-                            <span>Currently active plan:</span>
-                            <span className="font-semibold text-on-surface">{premiumName} ({intervalText})</span>
-                          </div>
-                          {remainingDays > 0 && (
-                            <div className="flex justify-between border-b border-surface-container-low pb-[var(--spacing-100)]">
-                              <span>Days remaining to roll over:</span>
-                              <span className="font-semibold text-primary">{remainingDays} days</span>
-                            </div>
-                          )}
-                          <div className="flex justify-between border-b border-surface-container-low pb-[var(--spacing-100)]">
-                            <span>New plan starting today:</span>
-                            <span className="font-semibold text-on-surface">{premiumName} ({pendingCheckoutPlan.interval === "yearly" ? "Yearly" : "Monthly"})</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>New access until date:</span>
-                            <span className="font-semibold text-primary">{formatDate(projectedFinalEnd.toISOString())}</span>
-                          </div>
-                        </div>
-
-                        <p className="text-body-small text-outline">
-                          {remainingDays > 0 ? (
-                            <>Your remaining <strong>{remainingDays} days</strong> will not be forfeited. They will be added directly onto your new plan duration.</>
-                          ) : (
-                            <>Your new plan starts immediately with full access features.</>
-                          )}
-                        </p>
-
-                        <div className="flex flex-col sm:flex-row gap-[var(--spacing-150)] pt-[var(--spacing-100)]">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="flex-1"
-                            disabled={isCheckoutPending}
-                            onClick={() => setPendingCheckoutPlan(null)}
-                          >
-                            Back
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="primary"
-                            className="flex-1"
-                            disabled={isCheckoutPending}
-                            onClick={() => goToCheckout(pendingCheckoutPlan.interval)}
-                          >
-                            {isCheckoutPending ? "Redirecting..." : "Proceed to Checkout"}
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-[var(--spacing-200)]">
-                        <PlanCard
-                          label="Monthly"
-                          priceLabel={formatMoneyMinor(premium.monthlyPriceMinor, premium.currency)}
-                          perLabel="per month"
-                          isCurrent={isPremium && currentInterval === "monthly"}
-                          isLoading={isCheckoutPending}
-                          action={getPlanAction("monthly")}
-                          onAction={() => handlePlanSelection("monthly")}
-                        />
-                        <PlanCard
-                          label="Yearly"
-                          priceLabel={
-                            premium.yearlyPriceMinor === null
-                              ? null
-                              : formatMoneyMinor(premium.yearlyPriceMinor, premium.currency)
-                          }
-                          perLabel="per year"
-                          badge={premium.yearlyPriceMinor === null ? undefined : badgeText}
-                          isCurrent={isPremium && currentInterval === "yearly"}
-                          isLoading={isCheckoutPending}
-                          action={
-                            premium.yearlyPriceMinor === null ? null : getPlanAction("yearly")
-                          }
-                          onAction={() => handlePlanSelection("yearly")}
-                        />
-                      </div>
-                    )}
-                    
-                    {checkoutError && (
-                      <div className="mt-[var(--spacing-300)] rounded-md bg-error-container p-[var(--spacing-200)] text-center text-body-medium text-on-error-container" role="alert">
-                        {checkoutError}
-                      </div>
-                    )}
+                    <div className="grid grid-cols-2 gap-[var(--spacing-200)]">
+                      <PlanCard
+                        label="Monthly"
+                        priceLabel={formatMoneyMinor(premium.monthlyPriceMinor, premium.currency)}
+                        perLabel="per month"
+                        isCurrent={isPremium && currentInterval === "monthly"}
+                        isLoading={isCheckoutPending}
+                        action={getPlanAction("monthly")}
+                        onAction={() => handlePlanSelection("monthly")}
+                      />
+                      <PlanCard
+                        label="Yearly"
+                        priceLabel={
+                          premium.yearlyPriceMinor === null
+                            ? null
+                            : formatMoneyMinor(premium.yearlyPriceMinor, premium.currency)
+                        }
+                        perLabel="per year"
+                        badge={premium.yearlyPriceMinor === null ? undefined : badgeText}
+                        isCurrent={isPremium && currentInterval === "yearly"}
+                        isLoading={isCheckoutPending}
+                        action={
+                          premium.yearlyPriceMinor === null ? null : getPlanAction("yearly")
+                        }
+                        onAction={() => handlePlanSelection("yearly")}
+                      />
+                    </div>
                   </section>
 
                   {/* Cancel subscription */}
@@ -597,6 +617,111 @@ export function BillingModal({
               )}
             </div>
           </div>
+
+          {/* ── Stacked Pop-up Modal for Schedule Plan Confirmation ── */}
+          {pendingSchedulePlan && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center p-[var(--spacing-400)]">
+              {/* Backdrop */}
+              <div
+                className="fixed inset-0 bg-inverse-surface/60 backdrop-blur-xs"
+                aria-hidden="true"
+                onClick={() => setPendingSchedulePlan(null)}
+              />
+
+              {/* Modal Card */}
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="schedule-modal-title"
+                className="relative z-10 w-full max-w-[400px] overflow-hidden rounded-2xl border border-surface-container-high bg-surface-lowest shadow-hard outline-none"
+              >
+                {/* Accent bar */}
+                <div className="h-[3px] w-full bg-primary" />
+
+                {/* Header */}
+                <div className="flex items-center justify-between px-[var(--spacing-400)] pt-[var(--spacing-300)] pb-[var(--spacing-200)]">
+                  <div className="flex items-center gap-[var(--spacing-200)]">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary-container text-on-primary-container">
+                      <CalendarCheck className="h-4 w-4" aria-hidden="true" />
+                    </div>
+                    <h3
+                      id="schedule-modal-title"
+                      className="text-title-small font-semibold text-on-surface"
+                    >
+                      Confirm Plan Schedule
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPendingSchedulePlan(null)}
+                    className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface"
+                    aria-label="Close modal"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div className="border-t border-surface-container-low" />
+
+                {/* Body */}
+                <div className="p-[var(--spacing-400)] space-y-[var(--spacing-300)]">
+                  {/* Compact info summary */}
+                  <div className="rounded-xl border border-surface-container-high bg-surface-container-lowest p-[var(--spacing-250)] space-y-[var(--spacing-150)] text-body-small">
+                    <div className="flex items-center justify-between">
+                      <span className="text-outline">Running plan:</span>
+                      <span className="font-semibold text-on-surface">
+                        {premiumName} ({intervalText})
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-outline">Active until:</span>
+                      <span className="font-medium text-on-surface">
+                        {formatDate(subscription?.currentPeriodEnd ?? null)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-surface-container-low pt-[var(--spacing-150)]">
+                      <span className="text-outline">New scheduled plan:</span>
+                      <span className="font-bold text-primary">
+                        {premiumName} ({pendingSchedulePlan.interval === "yearly" ? "Yearly" : "Monthly"})
+                      </span>
+                    </div>
+                  </div>
+
+                  <p className="text-body-small text-outline leading-relaxed">
+                    Your current plan stays active until {formatDate(subscription?.currentPeriodEnd ?? null)}. No double charge will occur today.
+                  </p>
+
+                  {checkoutError && (
+                    <p className="text-body-small text-error" role="alert">
+                      {checkoutError}
+                    </p>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-[var(--spacing-200)] pt-[var(--spacing-100)]">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="flex-1"
+                      disabled={isScheduling}
+                      onClick={() => setPendingSchedulePlan(null)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      className="flex-1"
+                      disabled={isScheduling}
+                      onClick={confirmSchedulePlan}
+                    >
+                      {isScheduling ? "Scheduling..." : "Approve Schedule"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </>

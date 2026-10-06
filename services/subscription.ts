@@ -1,11 +1,38 @@
 import { prisma } from "@/lib/prisma";
+import { cacheService } from "@/lib/cache/cache-service";
 
 export type SubscriptionInterval = "monthly" | "yearly";
 
 const YEARLY_THRESHOLD_DAYS = 300;
 
+export async function invalidateUserSubscriptionCache(userId: string): Promise<void> {
+  await cacheService.del(`sub:user:${userId}`);
+}
+
 export async function getActiveSubscription(userId: string) {
-  return prisma.subscription.findFirst({
+  const cacheKey = `sub:user:${userId}`;
+  const cached = await cacheService.get<{
+    id: string;
+    userId: string;
+    planId: string;
+    status: string;
+    cancelAtPeriodEnd: boolean;
+    scheduledPlanId: string | null;
+    scheduledInterval: string | null;
+    currentPeriodStart: string | Date | null;
+    currentPeriodEnd: string | Date | null;
+    plan: { id: string; name: string };
+  }>(cacheKey);
+
+  if (cached) {
+    return {
+      ...cached,
+      currentPeriodStart: cached.currentPeriodStart ? new Date(cached.currentPeriodStart) : null,
+      currentPeriodEnd: cached.currentPeriodEnd ? new Date(cached.currentPeriodEnd) : null,
+    };
+  }
+
+  const sub = await prisma.subscription.findFirst({
     where: { userId, status: "ACTIVE" },
     orderBy: { createdAt: "desc" },
     take: 1,
@@ -24,6 +51,12 @@ export async function getActiveSubscription(userId: string) {
       },
     },
   });
+
+  if (sub) {
+    await cacheService.set(cacheKey, sub, 600); // 10 minutes TTL
+  }
+
+  return sub;
 }
 
 export function inferSubscriptionInterval(subscription: {
@@ -137,5 +170,7 @@ export async function expireSubscriptionIfDue(subscription: {
     });
   });
 
+  await invalidateUserSubscriptionCache(subscription.userId);
   return true;
 }
+

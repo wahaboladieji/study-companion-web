@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { expireSubscriptionIfDue } from "@/services/subscription";
+import { cacheService } from "@/lib/cache/cache-service";
 
 export type LimitType =
   | "COURSE"
@@ -25,6 +26,17 @@ export class UsageLimitError extends Error {
   }
 }
 
+export async function invalidateUserUsageCache(userId: string): Promise<void> {
+  await cacheService.del([
+    `plan:user:${userId}`,
+    `usage:user:${userId}:COURSE`,
+    `usage:user:${userId}:STORAGE`,
+    `usage:user:${userId}:UPLOAD`,
+    `usage:user:${userId}:GENERATION`,
+    `usage:user:${userId}:CHAT`,
+  ]);
+}
+
 /**
  * Gets the current UTC year and month as the billing period for free users,
  * or the active subscription's billing period if applicable.
@@ -35,6 +47,12 @@ export function getCurrentBillingPeriod(subscriptionStart?: Date | null): string
 }
 
 export async function loadEffectivePlan(userId: string) {
+  const cacheKey = `plan:user:${userId}`;
+  const cachedPlan = await cacheService.get<any>(cacheKey);
+  if (cachedPlan) {
+    return cachedPlan;
+  }
+
   const user = await prisma.user.findUnique({
     where: { id: userId },
     include: {
@@ -52,6 +70,7 @@ export async function loadEffectivePlan(userId: string) {
   if (activeSubscription?.plan) {
     const expired = await expireSubscriptionIfDue(activeSubscription);
     if (!expired) {
+      await cacheService.set(cacheKey, activeSubscription.plan, 300);
       return activeSubscription.plan;
     }
   }
@@ -61,12 +80,9 @@ export async function loadEffectivePlan(userId: string) {
     where: { name: "FREE", active: true },
   });
 
-  if (freePlan) {
-    return freePlan;
-  }
-
-  // Fallback to Free plan limits
-  return DEFAULT_FREE_PLAN;
+  const resultPlan = freePlan || DEFAULT_FREE_PLAN;
+  await cacheService.set(cacheKey, resultPlan, 300);
+  return resultPlan;
 }
 
 function getPlanLimit(plan: typeof DEFAULT_FREE_PLAN, type: LimitType): number {
@@ -95,6 +111,12 @@ export async function calculateUsage({
   type: LimitType;
   billingPeriod: string;
 }) {
+  const cacheKey = `usage:user:${userId}:${type}:${billingPeriod}`;
+  const cachedUsage = await cacheService.get<number>(cacheKey);
+  if (cachedUsage !== null) {
+    return cachedUsage;
+  }
+
   // Map LimitType to eventType prefixes or exact matches
   let eventTypePrefix = "";
   switch (type) {
@@ -108,7 +130,6 @@ export async function calculateUsage({
       eventTypePrefix = "STORAGE_USED";
       break;
     case "GENERATION":
-      // For GENERATION we might have STUDY_NOTES_GENERATED, FLASHCARDS_GENERATED
       eventTypePrefix = "GENERATED"; 
       break;
     case "CHAT":
@@ -116,41 +137,35 @@ export async function calculateUsage({
       break;
   }
 
-  // For COURSE and STORAGE, limits are absolute (not per billing period usually, but let's 
-  // assume COURSE is absolute and we can just count the active courses for courses.
-  // The skill asks us to use UsageEvents or authoritative resource counts.)
+  let usageCount = 0;
   if (type === "COURSE") {
-    // Authoritative resource count is better for absolute limits like courses
-    const count = await prisma.course.count({
+    usageCount = await prisma.course.count({
       where: { userId },
     });
-    return count;
-  }
-
-  if (type === "STORAGE") {
-    // Authoritative resource sum
+  } else if (type === "STORAGE") {
     const files = await prisma.file.aggregate({
       where: { course: { userId } },
       _sum: { fileSize: true },
     });
-    return files._sum.fileSize || 0;
+    usageCount = files._sum.fileSize || 0;
+  } else {
+    const events = await prisma.usageEvent.aggregate({
+      where: {
+        userId,
+        billingPeriod,
+        eventType: {
+          contains: eventTypePrefix,
+        },
+      },
+      _sum: {
+        quantity: true,
+      },
+    });
+    usageCount = events._sum.quantity || 0;
   }
 
-  // For other period-based limits, query usage events
-  const events = await prisma.usageEvent.aggregate({
-    where: {
-      userId,
-      billingPeriod,
-      eventType: {
-        contains: eventTypePrefix,
-      },
-    },
-    _sum: {
-      quantity: true,
-    },
-  });
-
-  return events._sum.quantity || 0;
+  await cacheService.set(cacheKey, usageCount, 300);
+  return usageCount;
 }
 
 export async function assertUsageAllowed(input: {
@@ -194,3 +209,4 @@ export async function assertUsageAllowed(input: {
     limit,
   };
 }
+

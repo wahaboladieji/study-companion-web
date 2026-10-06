@@ -3,20 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/services/auth";
 import { validateCsrfToken } from "@/services/csrf";
-import { uploadCourseFile, listCourseFiles, type UploadedFileResult } from "@/services/upload";
+import { uploadCourseFile, listCourseFiles, deleteFile, type UploadedFileResult, type CourseFileSummary } from "@/services/upload";
 
 export type UploadNotesFormState = {
   error?: string;
   files?: UploadedFileResult[];
 } | null;
-
-export type CourseFileSummary = {
-  id: string;
-  fileName: string;
-  fileSize: number;
-  processingStatus: string;
-  createdAt: string;
-};
 
 const CSRF_FAILURE = "Security check failed. Please refresh the page and try again.";
 const AUTH_FAILURE = "You must be signed in to upload files.";
@@ -78,4 +70,56 @@ export async function getCourseFilesAction(courseId: string): Promise<CourseFile
   }
 
   return listCourseFiles(user.id, courseId);
+}
+
+export type DeleteFileFormState = {
+  success?: boolean;
+  error?: string;
+} | null;
+
+export async function deleteFileAction(
+  prevState: DeleteFileFormState,
+  formData: FormData
+): Promise<DeleteFileFormState> {
+  const user = await getCurrentUser();
+  if (!user) {
+    return { success: false, error: AUTH_FAILURE };
+  }
+
+  const fileId = formData.get("fileId") as string | null;
+  const courseId = formData.get("courseId") as string | null;
+
+  if (!fileId || !courseId) {
+    return { success: false, error: "Invalid request." };
+  }
+
+  const result = await deleteFile(user.id, fileId);
+
+  if (result.success) {
+    revalidatePath("/dashboard");
+    revalidatePath(`/dashboard/course/${courseId}`);
+  }
+
+  return result;
+}
+
+export type CourseProcessingStatusResult = {
+  allReady: boolean;
+  hasStudyNote: boolean;
+};
+
+/**
+ * Lightweight polling endpoint for ProcessingStatusBanner.
+ * Returns whether all files are ready and whether a study note exists.
+ */
+export async function getCourseProcessingStatusAction(
+  courseId: string
+): Promise<CourseProcessingStatusResult> {
+  const user = await getCurrentUser();
+  if (!user) {
+    return { allReady: true, hasStudyNote: false };
+  }
+
+  const { getCourseProcessingStatus } = await import("@/services/course");
+  return getCourseProcessingStatus(user.id, courseId);
 }

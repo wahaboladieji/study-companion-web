@@ -9,6 +9,7 @@ import {
   getCourseFilesAction,
   type UploadNotesFormState,
 } from "@/app/actions/upload";
+import type { UploadedFileResult, CourseFileSummary } from "@/services/upload";
 import {
   validateUploadFile,
   formatFileSize,
@@ -33,7 +34,7 @@ export type UploadCourseOption = { id: string; name: string };
 const ACCEPTED_TYPES = ".pdf,.docx,.pptx,.jpg,.jpeg,.png";
 const POLL_INTERVAL_MS = 3000;
 
-type UploadItemStatus = "queued" | "rejected" | "processing" | "ready" | "failed";
+type UploadItemStatus = "queued" | "rejected" | "uploaded" | "processing" | "ready" | "failed";
 
 type UploadItem = {
   key: string;
@@ -48,6 +49,13 @@ type UploadItem = {
 
 function StatusBadge({ item, isPending }: { item: UploadItem; isPending: boolean }) {
   switch (item.status) {
+    case "uploaded":
+      return (
+        <span className="inline-flex items-center gap-[var(--spacing-50)] rounded-full bg-success-container px-[var(--spacing-100)] py-[var(--spacing-25)] text-label-medium text-on-success-container">
+          <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+          Uploaded
+        </span>
+      );
     case "processing":
       return (
         <span className="inline-flex items-center gap-[var(--spacing-50)] rounded-full bg-primary-container-light px-[var(--spacing-100)] py-[var(--spacing-25)] text-label-medium text-on-primary-container">
@@ -237,18 +245,14 @@ export function UploadNotesDialog({
     courseOptionRefs.current[activeCourseIndex]?.scrollIntoView({ block: "nearest" });
   }, [isCourseMenuOpen, activeCourseIndex]);
 
-  const hasQueued = items.some((item) => item.status === "queued");
   const hasProcessing = items.some((item) => item.status === "processing");
-  const queuedCount = items.filter((item) => item.status === "queued").length;
-  const canUpload = courses.length > 0 && selectedCourseId && queuedCount > 0 && !isPending && !!csrfToken;
 
   const router = useRouter();
-  const uploadedReady = items.filter((item) => item.status === "ready").length;
+  const uploadedReady = items.filter((item) => item.status === "ready" || item.status === "uploaded").length;
   const uploadedProcessing = items.filter((item) => item.status === "processing").length;
   const uploadedFailed = items.filter((item) => item.status === "failed").length;
   const hasUploaded = uploadedReady > 0 || uploadedProcessing > 0 || uploadedFailed > 0;
   const allUploadsDone = hasUploaded && uploadedProcessing === 0;
-  const allUploadsFailed = allUploadsDone && uploadedReady === 0 && uploadedFailed > 0;
 
   const goToCourse = () => {
     if (!selectedCourseId) {
@@ -264,41 +268,43 @@ export function UploadNotesDialog({
       return;
     }
     setError(null);
-    setItems((prev) => {
-      const next = [...prev];
-      for (const file of files) {
-        const validation = validateUploadFile(file.name, file.type, file.size);
-        if (!validation.ok) {
-          next.push({
-            key: nextKey(),
-            fileName: file.name,
-            fileSize: file.size,
-            status: "rejected",
-            error: validation.error,
-            duplicate: false,
-            file,
-          });
-        } else {
-          next.push({
-            key: nextKey(),
-            fileName: file.name,
-            fileSize: file.size,
-            status: "queued",
-            duplicate: false,
-            file,
-          });
-        }
+    const newItems: UploadItem[] = [];
+    for (const file of files) {
+      const validation = validateUploadFile(file.name, file.type, file.size);
+      if (!validation.ok) {
+        newItems.push({
+          key: nextKey(),
+          fileName: file.name,
+          fileSize: file.size,
+          status: "rejected",
+          error: validation.error,
+          duplicate: false,
+          file,
+        });
+      } else {
+        newItems.push({
+          key: nextKey(),
+          fileName: file.name,
+          fileSize: file.size,
+          status: "queued",
+          duplicate: false,
+          file,
+        });
       }
-      return next;
-    });
+    }
+    setItems((prev) => [...prev, ...newItems]);
+    const queuedNew = newItems.filter((item) => item.status === "queued");
+    if (queuedNew.length > 0) {
+      performUpload(queuedNew);
+    }
   };
 
   const removeItem = (key: string) => {
     setItems((prev) => prev.filter((item) => item.key !== key));
   };
 
-  const handleSubmit = () => {
-    if (!selectedCourseId || queuedCount === 0) {
+  const performUpload = (queuedItems: UploadItem[]) => {
+    if (!selectedCourseId || queuedItems.length === 0) {
       return;
     }
     if (!csrfToken) {
@@ -307,7 +313,7 @@ export function UploadNotesDialog({
     }
     setError(null);
 
-    const queuedItems = items.filter((item) => item.status === "queued");
+    const keysSent = queuedItems.map((item) => item.key);
     const formData = new FormData();
     formData.set("csrfToken", csrfToken);
     formData.set("courseId", selectedCourseId);
@@ -334,16 +340,10 @@ export function UploadNotesDialog({
         const results = result.files;
         setItems((prev) => {
           const next = [...prev];
-          const queuedIndexes: number[] = [];
-          next.forEach((item, index) => {
-            if (item.status === "queued") {
-              queuedIndexes.push(index);
-            }
-          });
-
-          results.forEach((res, index) => {
-            const itemIndex = queuedIndexes[index];
-            if (itemIndex === undefined) {
+          results.forEach((res: UploadedFileResult, index: number) => {
+            const key = keysSent[index];
+            const itemIndex = next.findIndex((item) => item.key === key);
+            if (itemIndex < 0) {
               return;
             }
             const current = next[itemIndex];
@@ -355,9 +355,18 @@ export function UploadNotesDialog({
                 duplicate: res.duplicate,
               };
             } else {
+              let newStatus: UploadItemStatus;
+              if (res.processingStatus === "READY") {
+                newStatus = "ready";
+              } else if (res.processingStatus === "PROCESSING") {
+                newStatus = "processing";
+              } else {
+                // UPLOADED — file is stored, awaiting user to start processing
+                newStatus = "uploaded";
+              }
               next[itemIndex] = {
                 ...current,
-                status: "processing",
+                status: newStatus,
                 fileId: res.id,
                 duplicate: res.duplicate,
               };
@@ -391,18 +400,18 @@ export function UploadNotesDialog({
     let cancelled = false;
 
     const syncStatuses = async () => {
-      const files = await getCourseFilesAction(selectedCourseId);
+      const files: CourseFileSummary[] = await getCourseFilesAction(selectedCourseId);
       if (cancelled) {
         return;
       }
-      const byId = new Map(files.map((file) => [file.id, file]));
+      const byId = new Map<string, CourseFileSummary>(files.map((file: CourseFileSummary) => [file.id, file]));
       setItems((prev) => {
         let changed = false;
         const next = prev.map((item) => {
           if (item.status !== "processing" || !item.fileId) {
             return item;
           }
-          const server = byId.get(item.fileId);
+          const server: CourseFileSummary | undefined = byId.get(item.fileId);
           if (!server) {
             return item;
           }
@@ -547,12 +556,12 @@ export function UploadNotesDialog({
             aria-modal="true"
             aria-labelledby="upload-notes-title"
           >
-            <div className="flex items-start justify-between gap-[var(--spacing-200)] border-b border-surface-container-low px-5 py-[var(--spacing-500)]">
+            <div className="flex items-start justify-between gap-[var(--spacing-200)] border-b border-surface-container-low px-5 pt-[var(--spacing-500)] pb-[var(--spacing-300)]">
               <div>
                 <h2 id="upload-notes-title" className="text-title-medium font-semibold text-on-surface">
                   Upload Notes
                 </h2>
-                <p className="mt-[var(--spacing-50)] text-body-small text-outline">
+                <p className="mt-[var(--spacing-100)] text-body-small text-outline">
                   Add handwritten notes and study materials so AI can transcribe and organize them.
                 </p>
               </div>
@@ -567,7 +576,7 @@ export function UploadNotesDialog({
               </button>
             </div>
 
-            <div className="flex-1 space-y-[var(--spacing-400)] overflow-y-auto px-5 py-[var(--spacing-500)]">
+            <div className="flex-1 space-y-[var(--spacing-250)] overflow-y-auto px-5 pt-[var(--spacing-300)] pb-[var(--spacing-500)]">
               {renderCourseField()}
 
               {courses.length > 0 && (
@@ -644,9 +653,9 @@ export function UploadNotesDialog({
                               <p className="mt-[var(--spacing-25)] text-body-small text-error">{item.error}</p>
                             )}
                             {item.duplicate && item.status !== "queued" && (
-                              <p className="mt-[var(--spacing-25)] flex items-center gap-[var(--spacing-50)] text-body-small text-on-surface-variant">
-                                <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
-                                A file with this name already exists in this course. It was added as a separate file.
+                              <p className="mt-[var(--spacing-100)] flex items-start gap-[var(--spacing-100)] text-body-small text-outline">
+                                <AlertTriangle className="mt-[1px] h-4 w-4 shrink-0" aria-hidden="true" />
+                                A file with this name already exists. Added separately.
                               </p>
                             )}
                           </div>
@@ -676,79 +685,19 @@ export function UploadNotesDialog({
                 </div>
               )}
 
-              {hasUploaded && (
-                <div className="space-y-[var(--spacing-300)] rounded-lg border border-surface-container-high bg-surface p-[var(--spacing-400)]">
-                  <div className="flex items-start gap-[var(--spacing-150)]">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-success-container text-on-success-container">
-                      <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-                    </div>
-                    <div>
-                      <h3 className="text-title-medium font-semibold text-on-surface">
-                        {allUploadsFailed
-                          ? "Upload needs attention"
-                          : allUploadsDone
-                            ? "Upload complete"
-                            : "Upload in progress"}
-                      </h3>
-                      <p className="mt-[var(--spacing-25)] text-body-small text-on-surface-variant">
-                        {allUploadsFailed
-                          ? `${uploadedFailed} file${uploadedFailed === 1 ? " has" : "s have"} failed to process. Remove them and try again, or open your course to review.`
-                          : allUploadsDone
-                            ? uploadedFailed > 0
-                              ? `${uploadedReady} file${uploadedReady === 1 ? " is" : "s are"} ready and ${uploadedFailed} failed. Open your course to continue.`
-                              : `${uploadedReady} file${uploadedReady === 1 ? " is" : "s are"} ready. Open your course to continue.`
-                            : `${uploadedProcessing} file${uploadedProcessing === 1 ? " is" : "s are"} still processing. You can close this drawer and check progress in your course.`}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div>
-                    <p className="text-label-medium font-medium text-on-surface">What&apos;s next</p>
-                    <ol className="mt-[var(--spacing-100)] space-y-[var(--spacing-100)]">
-                      {[
-                        "Open your course to review your files",
-                        "Generate AI Study Notes on demand",
-                        "Generate AI Flashcards on demand",
-                        "Chat with your course materials",
-                      ].map((step, index) => (
-                        <li
-                          key={step}
-                          className="flex items-start gap-[var(--spacing-100)] text-body-medium text-on-surface"
-                        >
-                          <span
-                            className="mt-[var(--spacing-25)] flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary-container-light text-label-small text-on-primary-container"
-                            aria-hidden="true"
-                          >
-                            {index + 1}
-                          </span>
-                          {step}
-                        </li>
-                      ))}
-                    </ol>
-                  </div>
-
-                  <Button type="button" onClick={goToCourse} className="w-full">
-                    Go to {courses.find((course) => course.id === selectedCourseId)?.name || "course"}
-                    <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                  </Button>
-                </div>
+              {allUploadsDone && (
+                <Button type="button" onClick={goToCourse} className="w-full">
+                  Go to {courses.find((course) => course.id === selectedCourseId)?.name || "course"}
+                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
+                </Button>
               )}
             </div>
 
             <div className="border-t border-surface-container-low px-5 py-[var(--spacing-400)]">
-              <div className="flex flex-col gap-[var(--spacing-200)] sm:flex-row sm:items-center sm:justify-between">
-                <div className="rounded-md bg-primary-container-light px-[var(--spacing-200)] py-[var(--spacing-100)]">
-                  <p className="text-body-small text-outline">
-                    AI Study Notes and Flashcards are generated on demand once your files finish processing.
-                  </p>
-                </div>
-                {hasQueued && (
-                  <Button type="button" onClick={handleSubmit} disabled={!canUpload} className="sm:shrink-0">
-                    {isPending
-                      ? "Uploading..."
-                      : `Upload ${queuedCount} file${queuedCount === 1 ? "" : "s"}`}
-                  </Button>
-                )}
+              <div className="rounded-md bg-primary-container-light px-[var(--spacing-200)] py-[var(--spacing-100)]">
+                <p className="text-body-small text-outline">
+                  AI Study Notes and Flashcards are generated on demand once your files finish processing.
+                </p>
               </div>
             </div>
           </div>

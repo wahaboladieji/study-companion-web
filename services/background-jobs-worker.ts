@@ -3,8 +3,8 @@ import { BackgroundJob } from "@prisma/client";
 import { sendVerificationEmail, sendWelcomeEmail, sendPasswordResetEmail } from "@/services/email";
 import { SendVerificationEmailPayload, SendWelcomeEmailPayload, SendPasswordResetEmailPayload } from "@/services/background-jobs";
 import { derive5DigitCode } from "@/services/verification";
-import { objectStorage } from "@/lib/storage/object-storage";
 import { ProcessFilePayload } from "@/services/file-processing";
+import { processFileContent } from "@/services/document-processor";
 
 export async function processProcessFile(job: BackgroundJob) {
   const payload = job.payload as unknown as ProcessFilePayload;
@@ -13,36 +13,22 @@ export async function processProcessFile(job: BackgroundJob) {
     throw new Error("Invalid payload: missing fileId");
   }
 
-  const file = await prisma.file.findUnique({
-    where: { id: payload.fileId },
-  });
-
-  if (!file) {
-    // File deleted, nothing to do. Complete the job gracefully.
-    return;
+  try {
+    await processFileContent(payload.fileId);
+  } catch (err) {
+    // Record the error on the file record so the UI can display it
+    const errorMessage =
+      err instanceof Error ? err.message : "An unexpected error occurred during processing.";
+    await prisma.file
+      .update({
+        where: { id: payload.fileId },
+        data: { processingStatus: "FAILED", processingError: errorMessage },
+      })
+      .catch(() => {
+        // Best-effort — don't mask the original error
+      });
+    throw err;
   }
-
-  if (file.processingStatus === "READY") {
-    return;
-  }
-
-  await prisma.file.update({
-    where: { id: file.id },
-    data: { processingStatus: "PROCESSING", processingError: null },
-  });
-
-  await objectStorage.get(file.storageKey);
-
-  await prisma.$transaction([
-    prisma.file.update({
-      where: { id: file.id },
-      data: { processingStatus: "READY", processingError: null },
-    }),
-    prisma.course.update({
-      where: { id: file.courseId },
-      data: { updatedAt: new Date() },
-    }),
-  ]);
 }
 
 export async function processSendPasswordResetEmail(job: BackgroundJob) {
