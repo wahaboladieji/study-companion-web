@@ -2,17 +2,30 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Sparkles, X } from "lucide-react";
+import { Sparkles, X, CalendarCheck } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { formatMoneyMinor } from "@/lib/money";
 import { PlanCard } from "@/components/dashboard/plan-card";
 import { PlanComparisonTable } from "@/components/dashboard/plan-comparison-table";
 import type { UpgradeDialogData } from "@/services/plans";
 import type { SubscriptionInterval } from "@/services/subscription";
+import { createCheckoutAction, scheduleCheckoutAction } from "@/app/actions/billing";
+
+function formatDate(iso: string | null): string {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
 
 export function UpgradeDialog({
   data,
   currentTier,
   currentInterval,
+  cancelAtPeriodEnd,
+  currentPeriodEnd,
   triggerContent,
   triggerClassName,
   open,
@@ -21,6 +34,8 @@ export function UpgradeDialog({
   data: UpgradeDialogData;
   currentTier?: string | null;
   currentInterval?: SubscriptionInterval | null;
+  cancelAtPeriodEnd?: boolean;
+  currentPeriodEnd?: string | null;
   triggerContent?: React.ReactNode;
   triggerClassName?: string;
   open?: boolean;
@@ -28,6 +43,15 @@ export function UpgradeDialog({
 }) {
   const [internalOpen, setInternalOpen] = useState(false);
   const isOpen = open ?? internalOpen;
+  
+  const [csrfToken, setCsrfToken] = useState<string | null>(null);
+  const [isCheckoutPending, setIsCheckoutPending] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+
+  const [pendingCheckoutPlan, setPendingCheckoutPlan] = useState<{
+    interval: "monthly" | "yearly";
+  } | null>(null);
+
   const setIsOpen = useCallback(
     (next: boolean) => {
       if (onOpenChange) {
@@ -44,18 +68,40 @@ export function UpgradeDialog({
 
   useEffect(() => {
     if (!isOpen) return;
+    
+    let active = true;
+    fetch("/api/auth/csrf")
+      .then((res) => res.json())
+      .then((data: { csrfToken?: string }) => {
+        if (active) setCsrfToken(data.csrfToken ?? null);
+      })
+      .catch(() => {
+        if (active) setCsrfToken(null);
+      });
+
     panelRef.current?.focus();
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") setIsOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      active = false;
+      window.removeEventListener("keydown", onKeyDown);
+    };
   }, [isOpen, setIsOpen]);
 
   const premium = data.premium;
   const normalizedTier = (currentTier ?? "FREE").trim().toUpperCase();
   const isPremiumCurrent =
     premium !== null && premium.name.toUpperCase() === normalizedTier;
+
+  const monthlyPrice = premium?.monthlyPriceMinor ?? 0;
+  const yearlyPrice = premium?.yearlyPriceMinor ?? 0;
+  let savePercentage = 0;
+  if (monthlyPrice > 0 && yearlyPrice > 0) {
+    savePercentage = Math.round((1 - yearlyPrice / (monthlyPrice * 12)) * 100);
+  }
+  const badgeText = savePercentage > 0 ? `Save ${savePercentage}%` : "Best value";
 
   const getPlanAction = (
     interval: "monthly" | "yearly"
@@ -67,13 +113,65 @@ export function UpgradeDialog({
     return null;
   };
 
-  const goToCheckout = (interval: "monthly" | "yearly") => {
-    if (!premium) return;
-    setIsOpen(false);
-    router.push(
-      `/dashboard/billing?planId=${encodeURIComponent(premium.id)}&interval=${interval}`
-    );
+  const handlePlanSelection = (interval: "monthly" | "yearly") => {
+    if (!premium || !csrfToken) return;
+
+    if (isPremiumCurrent && currentPeriodEnd) {
+      setPendingCheckoutPlan({ interval });
+      setCheckoutError(null);
+      return;
+    }
+
+    goToCheckout(interval);
   };
+
+  const goToCheckout = async (interval: "monthly" | "yearly") => {
+    if (!premium || !csrfToken) return;
+    setIsCheckoutPending(true);
+    setCheckoutError(null);
+
+    const formData = new FormData();
+    formData.set("csrfToken", csrfToken);
+    formData.set("planId", premium.id);
+    formData.set("interval", interval);
+
+    try {
+      const result = await createCheckoutAction(null, formData);
+      if (result?.error) {
+        setCheckoutError(result.error);
+        setIsCheckoutPending(false);
+      } else if (result?.checkoutUrl) {
+        window.location.href = result.checkoutUrl;
+      } else {
+        setCheckoutError("Something went wrong. Please try again.");
+        setIsCheckoutPending(false);
+      }
+    } catch {
+      setCheckoutError("Something went wrong. Please try again.");
+      setIsCheckoutPending(false);
+    }
+  };
+
+  const endMs = currentPeriodEnd ? new Date(currentPeriodEnd).getTime() : Date.now();
+  const remainingMs = Math.max(0, endMs - Date.now());
+  const remainingDays = Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
+
+  const projectedStart = new Date();
+  const projectedBaseEnd = new Date(projectedStart);
+  if (pendingCheckoutPlan?.interval === "yearly") {
+    projectedBaseEnd.setFullYear(projectedBaseEnd.getFullYear() + 1);
+  } else {
+    projectedBaseEnd.setMonth(projectedBaseEnd.getMonth() + 1);
+  }
+  const projectedFinalEnd = new Date(projectedBaseEnd.getTime() + remainingMs);
+
+  const formattedEndDate = currentPeriodEnd
+    ? new Date(currentPeriodEnd).toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      })
+    : "the end of your billing cycle";
 
   return (
     <>
@@ -126,7 +224,7 @@ export function UpgradeDialog({
                   >
                     {isPremiumCurrent ? "Manage your plan" : "Upgrade to Premium"}
                   </h2>
-                  <p className="text-body-small text-on-surface-variant">
+                  <p className="text-body-small text-outline">
                     {isPremiumCurrent
                       ? currentInterval === "yearly"
                         ? "You're on Premium · billed annually"
@@ -164,33 +262,106 @@ export function UpgradeDialog({
                   {/* ── Divider ── */}
                   <div className="mb-[var(--spacing-300)] border-t border-surface-container-low" />
 
-                  {/* ── Billing plan cards ── */}
-                  <div className="grid grid-cols-2 gap-[var(--spacing-200)]">
-                    <PlanCard
-                      label="Monthly"
-                      priceLabel={formatMoneyMinor(premium.monthlyPriceMinor, premium.currency)}
-                      perLabel="per month"
-                      isCurrent={isPremiumCurrent && currentInterval === "monthly"}
-                      action={getPlanAction("monthly")}
-                      onAction={() => goToCheckout("monthly")}
-                    />
-                    <PlanCard
-                      label="Yearly"
-                      priceLabel={
-                        premium.yearlyPriceMinor === null
-                          ? null
-                          : formatMoneyMinor(premium.yearlyPriceMinor, premium.currency)
-                      }
-                      perLabel="per year"
-                      badge={premium.yearlyPriceMinor === null ? undefined : "Best value"}
-                      isCurrent={isPremiumCurrent && currentInterval === "yearly"}
-                      action={premium.yearlyPriceMinor === null ? null : getPlanAction("yearly")}
-                      onAction={() => goToCheckout("yearly")}
-                    />
-                  </div>
+                  {/* ── Interactive Rollover Notice Card or Plan Cards ── */}
+                  {pendingCheckoutPlan ? (
+                    <div className="rounded-xl border border-primary/30 bg-primary/5 p-[var(--spacing-400)] space-y-[var(--spacing-300)] animate-fade-in">
+                      <div className="flex items-center gap-[var(--spacing-200)] text-primary">
+                        <Sparkles className="h-5 w-5 shrink-0" aria-hidden="true" />
+                        <h4 className="text-label-large font-bold text-on-surface">
+                          {currentInterval === "monthly" && pendingCheckoutPlan.interval === "yearly"
+                            ? "Upgrade to Yearly & Rollover Days"
+                            : currentInterval === "yearly" && pendingCheckoutPlan.interval === "monthly"
+                              ? "Switch to Monthly & Rollover Days"
+                              : "Renew Plan & Rollover Days"}
+                        </h4>
+                      </div>
+
+                      <div className="space-y-[var(--spacing-150)] text-body-small text-on-surface-variant">
+                        <div className="flex justify-between border-b border-surface-container-low pb-[var(--spacing-100)]">
+                          <span>Currently active plan:</span>
+                          <span className="font-semibold text-on-surface">{premium.name} ({currentInterval ?? "Active"})</span>
+                        </div>
+                        {remainingDays > 0 && (
+                          <div className="flex justify-between border-b border-surface-container-low pb-[var(--spacing-100)]">
+                            <span>Days remaining to roll over:</span>
+                            <span className="font-semibold text-primary">{remainingDays} days</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between border-b border-surface-container-low pb-[var(--spacing-100)]">
+                          <span>New plan starting today:</span>
+                          <span className="font-semibold text-on-surface">{premium.name} ({pendingCheckoutPlan.interval === "yearly" ? "Yearly" : "Monthly"})</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>New access until date:</span>
+                          <span className="font-semibold text-primary">{formatDate(projectedFinalEnd.toISOString())}</span>
+                        </div>
+                      </div>
+
+                      <p className="text-body-small text-outline">
+                        {remainingDays > 0 ? (
+                          <>Your remaining <strong>{remainingDays} days</strong> will not be forfeited. They will be added directly onto your new plan duration.</>
+                        ) : (
+                          <>Your new plan starts immediately with full access features.</>
+                        )}
+                      </p>
+
+                      <div className="flex flex-col sm:flex-row gap-[var(--spacing-150)] pt-[var(--spacing-100)]">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="flex-1"
+                          disabled={isCheckoutPending}
+                          onClick={() => setPendingCheckoutPlan(null)}
+                        >
+                          Back
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="primary"
+                          className="flex-1"
+                          disabled={isCheckoutPending}
+                          onClick={() => goToCheckout(pendingCheckoutPlan.interval)}
+                        >
+                          {isCheckoutPending ? "Redirecting..." : "Proceed to Checkout"}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-[var(--spacing-200)]">
+                      <PlanCard
+                        label="Monthly"
+                        priceLabel={formatMoneyMinor(premium.monthlyPriceMinor, premium.currency)}
+                        perLabel="per month"
+                        isCurrent={isPremiumCurrent && currentInterval === "monthly"}
+                        isLoading={isCheckoutPending}
+                        action={getPlanAction("monthly")}
+                        onAction={() => handlePlanSelection("monthly")}
+                      />
+                      <PlanCard
+                        label="Yearly"
+                        priceLabel={
+                          premium.yearlyPriceMinor === null
+                            ? null
+                            : formatMoneyMinor(premium.yearlyPriceMinor, premium.currency)
+                        }
+                        perLabel="per year"
+                        badge={premium.yearlyPriceMinor === null ? undefined : badgeText}
+                        isCurrent={isPremiumCurrent && currentInterval === "yearly"}
+                        isLoading={isCheckoutPending}
+                        action={premium.yearlyPriceMinor === null ? null : getPlanAction("yearly")}
+                        onAction={() => handlePlanSelection("yearly")}
+                      />
+                    </div>
+                  )}
+                  
+                  {checkoutError && (
+                    <div className="mt-[var(--spacing-300)] rounded-md bg-error-container p-[var(--spacing-200)] text-center text-body-medium text-on-error-container" role="alert">
+                      {checkoutError}
+                    </div>
+                  )}
 
                   {/* ── Footer note ── */}
-                  <p className="mt-[var(--spacing-300)] text-center text-label-small text-on-surface-variant">
+                  <p className="mt-[var(--spacing-300)] text-center text-label-small text-outline">
                     Cancel or switch anytime · Secure checkout via Flutterwave
                   </p>
                 </>

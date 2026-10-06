@@ -2,36 +2,22 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CreditCard, Loader2, X, Sparkles } from "lucide-react";
+import { AlertTriangle, CreditCard, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatMoneyMinor } from "@/lib/money";
 import { PlanCard } from "@/components/dashboard/plan-card";
 import {
-  createCheckoutAction,
   cancelSubscriptionAction,
   getBillingOverviewAction,
   resumeSubscriptionAction,
-  scheduleCheckoutAction,
-  clearScheduledChangeAction,
 } from "@/app/actions/billing";
 import type { BillingOverview } from "@/services/billing";
 
-function InfoRow({
-  label,
-  value,
-  action,
-}: {
-  label: string;
-  value: React.ReactNode;
-  action?: React.ReactNode;
-}) {
+function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-[var(--spacing-200)] border-t border-surface-container-low px-[var(--spacing-300)] py-[var(--spacing-150)] first:border-t-0">
-      <span className="text-body-small text-outline">{label}</span>
-      <div className="flex items-center gap-[var(--spacing-200)]">
-        <span className="text-body-small font-semibold text-on-surface">{value}</span>
-        {action}
-      </div>
+    <div className="flex items-center justify-between gap-[var(--spacing-200)] border-t border-surface-container-low px-[var(--spacing-300)] py-[var(--spacing-100)] first:border-t-0">
+      <span className="text-body-small text-on-surface-variant">{label}</span>
+      <span className="text-body-small font-semibold text-on-surface">{value}</span>
     </div>
   );
 }
@@ -62,13 +48,6 @@ export function BillingModal({
   const [isCancelling, setIsCancelling] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
-  
-  const [isCheckoutPending, setIsCheckoutPending] = useState(false);
-  const [checkoutError, setCheckoutError] = useState<string | null>(null);
-
-  const [pendingCheckoutPlan, setPendingCheckoutPlan] = useState<{
-    interval: "monthly" | "yearly";
-  } | null>(null);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -140,14 +119,6 @@ export function BillingModal({
     isPremium ? aiGenerationRow?.premiumValue : aiGenerationRow?.freeValue ?? "—"
   } AI generations / month`;
 
-  const monthlyPrice = premium?.monthlyPriceMinor ?? 0;
-  const yearlyPrice = premium?.yearlyPriceMinor ?? 0;
-  let savePercentage = 0;
-  if (monthlyPrice > 0 && yearlyPrice > 0) {
-    savePercentage = Math.round((1 - yearlyPrice / (monthlyPrice * 12)) * 100);
-  }
-  const badgeText = savePercentage > 0 ? `Save ${savePercentage}%` : "Best value";
-
   const getPlanAction = (
     interval: "monthly" | "yearly"
   ): "upgrade" | "downgrade" | null => {
@@ -158,57 +129,13 @@ export function BillingModal({
     return null;
   };
 
-  const handlePlanSelection = (interval: "monthly" | "yearly") => {
-    if (!premium || !csrfToken) return;
-
-    if (isPremium && subscription?.currentPeriodEnd) {
-      setPendingCheckoutPlan({ interval });
-      setCheckoutError(null);
-      return;
-    }
-
-    goToCheckout(interval);
+  const goToCheckout = (interval: "monthly" | "yearly") => {
+    if (!premium) return;
+    onOpenChange(false);
+    router.push(
+      `/dashboard/billing?planId=${encodeURIComponent(premium.id)}&interval=${interval}`
+    );
   };
-
-  const goToCheckout = async (interval: "monthly" | "yearly") => {
-    if (!premium || !csrfToken) return;
-    setIsCheckoutPending(true);
-    setCheckoutError(null);
-
-    const formData = new FormData();
-    formData.set("csrfToken", csrfToken);
-    formData.set("planId", premium.id);
-    formData.set("interval", interval);
-
-    try {
-      const result = await createCheckoutAction(null, formData);
-      if (result?.error) {
-        setCheckoutError(result.error);
-        setIsCheckoutPending(false);
-      } else if (result?.checkoutUrl) {
-        window.location.href = result.checkoutUrl;
-      } else {
-        setCheckoutError("Something went wrong. Please try again.");
-        setIsCheckoutPending(false);
-      }
-    } catch {
-      setCheckoutError("Something went wrong. Please try again.");
-      setIsCheckoutPending(false);
-    }
-  };
-
-  const endMs = subscription?.currentPeriodEnd ? new Date(subscription.currentPeriodEnd).getTime() : Date.now();
-  const remainingMs = Math.max(0, endMs - Date.now());
-  const remainingDays = Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
-
-  const projectedStart = new Date();
-  const projectedBaseEnd = new Date(projectedStart);
-  if (pendingCheckoutPlan?.interval === "yearly") {
-    projectedBaseEnd.setFullYear(projectedBaseEnd.getFullYear() + 1);
-  } else {
-    projectedBaseEnd.setMonth(projectedBaseEnd.getMonth() + 1);
-  }
-  const projectedFinalEnd = new Date(projectedBaseEnd.getTime() + remainingMs);
 
   const handleCancel = async () => {
     if (!csrfToken) {
@@ -290,7 +217,7 @@ export function BillingModal({
                   >
                     Billing
                   </h2>
-                  <p className="text-body-small text-outline">
+                  <p className="text-body-small text-on-surface-variant">
                     Manage your plan and payments
                   </p>
                 </div>
@@ -355,46 +282,15 @@ export function BillingModal({
                     <div className="overflow-hidden rounded-xl border border-surface-container-high">
                       <InfoRow
                         label="Current plan"
-                        value={
-                          isPremium ? (
-                            <span className="inline-flex items-center gap-[var(--spacing-150)]">
-                              {premiumName}
-                              {subscription?.cancelAtPeriodEnd && (
-                                <span className="rounded-full bg-error-container/50 px-[var(--spacing-150)] py-[var(--spacing-25)] text-label-small font-semibold text-error">
-                                  Canceled
-                                </span>
-                              )}
-                            </span>
-                          ) : (
-                            "Free"
-                          )
-                        }
+                        value={isPremium ? premiumName : "Free"}
                       />
                       <InfoRow label="Credits" value={creditsText} />
                       <InfoRow
                         label="Subscription"
-                        value={
-                          isPremium
-                            ? subscription?.cancelAtPeriodEnd
-                              ? `Canceled · ${intervalText}`
-                              : `Active · ${intervalText}`
-                            : "—"
-                        }
-                        action={
-                          isPremium && subscription?.cancelAtPeriodEnd ? (
-                            <button
-                              type="button"
-                              className="text-label-small font-semibold text-primary transition-colors hover:underline disabled:opacity-50"
-                              disabled={isResuming}
-                              onClick={handleResume}
-                            >
-                              {isResuming ? "Resuming..." : "Resume"}
-                            </button>
-                          ) : undefined
-                        }
+                        value={isPremium ? `Active · ${intervalText}` : "—"}
                       />
                       <InfoRow
-                        label="Access until"
+                        label="Renewal date"
                         value={
                           isPremium && subscription?.currentPeriodEnd
                             ? formatDate(subscription.currentPeriodEnd)
@@ -403,6 +299,25 @@ export function BillingModal({
                       />
                     </div>
 
+                    {isPremium && subscription?.cancelAtPeriodEnd && (
+                      <div className="flex flex-wrap items-center justify-between gap-[var(--spacing-150)] rounded-lg border border-surface-container-high bg-surface px-[var(--spacing-300)] py-[var(--spacing-200)]">
+                        <p className="min-w-0 text-body-small text-on-surface-variant">
+                          Your plan stays active until{" "}
+                          {formatDate(subscription.currentPeriodEnd)}, then it cancels.
+                          You&apos;ll keep Premium access until then.
+                        </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="shrink-0"
+                          disabled={isResuming}
+                          onClick={handleResume}
+                        >
+                          {isResuming ? "Resuming..." : "Resume"}
+                        </Button>
+                      </div>
+                    )}
                     {cancelError && (
                       <p className="text-body-small text-error" role="alert">
                         {cancelError}
@@ -421,120 +336,52 @@ export function BillingModal({
                     >
                       {isPremium ? "Change billing period" : "Upgrade to Premium"}
                     </h3>
-
-                    {pendingCheckoutPlan ? (
-                      <div className="rounded-xl border border-primary/30 bg-primary/5 p-[var(--spacing-400)] space-y-[var(--spacing-300)] animate-fade-in">
-                        <div className="flex items-center gap-[var(--spacing-200)] text-primary">
-                          <Sparkles className="h-5 w-5 shrink-0" aria-hidden="true" />
-                          <h4 className="text-label-large font-bold text-on-surface">
-                            {currentInterval === "monthly" && pendingCheckoutPlan.interval === "yearly"
-                              ? "Upgrade to Yearly & Rollover Days"
-                              : currentInterval === "yearly" && pendingCheckoutPlan.interval === "monthly"
-                                ? "Switch to Monthly & Rollover Days"
-                                : "Renew Plan & Rollover Days"}
-                          </h4>
-                        </div>
-
-                        <div className="space-y-[var(--spacing-150)] text-body-small text-on-surface-variant">
-                          <div className="flex justify-between border-b border-surface-container-low pb-[var(--spacing-100)]">
-                            <span>Currently active plan:</span>
-                            <span className="font-semibold text-on-surface">{premiumName} ({intervalText})</span>
-                          </div>
-                          {remainingDays > 0 && (
-                            <div className="flex justify-between border-b border-surface-container-low pb-[var(--spacing-100)]">
-                              <span>Days remaining to roll over:</span>
-                              <span className="font-semibold text-primary">{remainingDays} days</span>
-                            </div>
-                          )}
-                          <div className="flex justify-between border-b border-surface-container-low pb-[var(--spacing-100)]">
-                            <span>New plan starting today:</span>
-                            <span className="font-semibold text-on-surface">{premiumName} ({pendingCheckoutPlan.interval === "yearly" ? "Yearly" : "Monthly"})</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>New access until date:</span>
-                            <span className="font-semibold text-primary">{formatDate(projectedFinalEnd.toISOString())}</span>
-                          </div>
-                        </div>
-
-                        <p className="text-body-small text-outline">
-                          {remainingDays > 0 ? (
-                            <>Your remaining <strong>{remainingDays} days</strong> will not be forfeited. They will be added directly onto your new plan duration.</>
-                          ) : (
-                            <>Your new plan starts immediately with full access features.</>
-                          )}
-                        </p>
-
-                        <div className="flex flex-col sm:flex-row gap-[var(--spacing-150)] pt-[var(--spacing-100)]">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="flex-1"
-                            disabled={isCheckoutPending}
-                            onClick={() => setPendingCheckoutPlan(null)}
-                          >
-                            Back
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="primary"
-                            className="flex-1"
-                            disabled={isCheckoutPending}
-                            onClick={() => goToCheckout(pendingCheckoutPlan.interval)}
-                          >
-                            {isCheckoutPending ? "Redirecting..." : "Proceed to Checkout"}
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-[var(--spacing-200)]">
-                        <PlanCard
-                          label="Monthly"
-                          priceLabel={formatMoneyMinor(premium.monthlyPriceMinor, premium.currency)}
-                          perLabel="per month"
-                          isCurrent={isPremium && currentInterval === "monthly"}
-                          isLoading={isCheckoutPending}
-                          action={getPlanAction("monthly")}
-                          onAction={() => handlePlanSelection("monthly")}
-                        />
-                        <PlanCard
-                          label="Yearly"
-                          priceLabel={
-                            premium.yearlyPriceMinor === null
-                              ? null
-                              : formatMoneyMinor(premium.yearlyPriceMinor, premium.currency)
-                          }
-                          perLabel="per year"
-                          badge={premium.yearlyPriceMinor === null ? undefined : badgeText}
-                          isCurrent={isPremium && currentInterval === "yearly"}
-                          isLoading={isCheckoutPending}
-                          action={
-                            premium.yearlyPriceMinor === null ? null : getPlanAction("yearly")
-                          }
-                          onAction={() => handlePlanSelection("yearly")}
-                        />
-                      </div>
-                    )}
-                    
-                    {checkoutError && (
-                      <div className="mt-[var(--spacing-300)] rounded-md bg-error-container p-[var(--spacing-200)] text-center text-body-medium text-on-error-container" role="alert">
-                        {checkoutError}
-                      </div>
-                    )}
+                    <div className="grid grid-cols-2 gap-[var(--spacing-200)]">
+                      <PlanCard
+                        label="Monthly"
+                        priceLabel={formatMoneyMinor(premium.monthlyPriceMinor, premium.currency)}
+                        perLabel="per month"
+                        isCurrent={isPremium && currentInterval === "monthly"}
+                        action={getPlanAction("monthly")}
+                        onAction={() => goToCheckout("monthly")}
+                      />
+                      <PlanCard
+                        label="Yearly"
+                        priceLabel={
+                          premium.yearlyPriceMinor === null
+                            ? null
+                            : formatMoneyMinor(premium.yearlyPriceMinor, premium.currency)
+                        }
+                        perLabel="per year"
+                        badge={premium.yearlyPriceMinor === null ? undefined : "Best value"}
+                        isCurrent={isPremium && currentInterval === "yearly"}
+                        action={
+                          premium.yearlyPriceMinor === null ? null : getPlanAction("yearly")
+                        }
+                        onAction={() => goToCheckout("yearly")}
+                      />
+                    </div>
                   </section>
 
                   {/* Cancel subscription */}
                   {isPremium && !subscription?.cancelAtPeriodEnd && (
                     <section
                       aria-labelledby="billing-cancel-heading"
-                      className="mt-[var(--spacing-400)] border-t border-surface-container-low pt-[var(--spacing-400)]"
+                      className="space-y-[var(--spacing-150)]"
                     >
-                      {confirmCancel ? (
-                        <div className="rounded-xl border border-surface-container-high bg-surface px-[var(--spacing-400)] py-[var(--spacing-300)] shadow-sm">
+                      <h3
+                        id="billing-cancel-heading"
+                        className="text-label-medium font-semibold text-on-surface-variant"
+                      >
+                        Subscription
+                      </h3>
+                      <div className="rounded-xl border border-error-container bg-error-container p-[var(--spacing-300)]">
+                        {confirmCancel ? (
                           <div className="space-y-[var(--spacing-200)]">
-                            <p className="text-label-large font-semibold text-on-surface">
+                            <p className="text-label-large font-semibold text-on-error-container">
                               Cancel your subscription?
                             </p>
-                            <p className="text-body-small text-outline">
+                            <p className="text-body-small text-on-error-container">
                               You&apos;ll keep Premium access until {cancelDateText}, then
                               revert to the Free plan. Your courses, files, notes, and chat
                               history are kept.
@@ -544,7 +391,7 @@ export function BillingModal({
                                 {cancelError}
                               </p>
                             )}
-                            <div className="flex flex-col gap-[var(--spacing-150)] pt-[var(--spacing-100)] sm:flex-row sm:justify-end">
+                            <div className="flex flex-col gap-[var(--spacing-100)] sm:flex-row sm:justify-end">
                               <Button
                                 type="button"
                                 variant="outline"
@@ -558,8 +405,7 @@ export function BillingModal({
                               </Button>
                               <Button
                                 type="button"
-                                variant="outline"
-                                className="border-error text-error hover:bg-error/10 hover:text-error"
+                                className="bg-error text-on-error hover:opacity-90"
                                 disabled={isCancelling}
                                 onClick={handleCancel}
                               >
@@ -567,30 +413,34 @@ export function BillingModal({
                               </Button>
                             </div>
                           </div>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col gap-[var(--spacing-300)] sm:flex-row sm:items-center sm:justify-between">
-                          <div>
-                            <h3
-                              id="billing-cancel-heading"
-                              className="text-label-medium font-semibold text-on-surface"
+                        ) : (
+                          <div className="space-y-[var(--spacing-150)]">
+                            <div className="flex items-start gap-[var(--spacing-150)]">
+                              <AlertTriangle
+                                className="mt-0.5 h-5 w-5 shrink-0 text-on-error-container"
+                                aria-hidden="true"
+                              />
+                              <div>
+                                <p className="text-label-large font-semibold text-on-error-container">
+                                  Cancel subscription
+                                </p>
+                                <p className="mt-[var(--spacing-25)] text-body-small text-on-error-container">
+                                  Your plan stays active until {cancelDateText}, then you&apos;ll
+                                  revert to the Free plan. Your study data is kept.
+                                </p>
+                              </div>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="w-full"
+                              onClick={() => setConfirmCancel(true)}
                             >
                               Cancel subscription
-                            </h3>
-                            <p className="text-body-small text-outline">
-                              Downgrade to the Free plan at the end of your billing cycle.
-                            </p>
+                            </Button>
                           </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="shrink-0 text-error hover:bg-error-container/50 hover:text-error border-error-container"
-                            onClick={() => setConfirmCancel(true)}
-                          >
-                            Cancel plan
-                          </Button>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </section>
                   )}
                 </>

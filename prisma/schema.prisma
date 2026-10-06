@@ -270,6 +270,8 @@ model Subscription {
   providerSubscriptionId String?
   status                 String
   cancelAtPeriodEnd      Boolean   @default(false)
+  scheduledPlanId        String?
+  scheduledInterval      String?
   currentPeriodStart     DateTime?
   currentPeriodEnd       DateTime?
   createdAt              DateTime  @default(now())

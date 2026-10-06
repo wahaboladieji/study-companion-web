@@ -111,6 +111,8 @@ export default async function DashboardLayout({
             data={upgradeData}
             currentTier={subscriptionTier}
             currentInterval={currentInterval}
+            cancelAtPeriodEnd={activeSubscription?.cancelAtPeriodEnd}
+            currentPeriodEnd={activeSubscription?.currentPeriodEnd?.toISOString() ?? null}
             triggerContent={upgradeTriggerContent}
             triggerClassName={upgradeTriggerClassName}
           />
@@ -126,6 +128,8 @@ export default async function DashboardLayout({
             data={upgradeData}
             currentTier={subscriptionTier}
             currentInterval={currentInterval}
+            cancelAtPeriodEnd={activeSubscription?.cancelAtPeriodEnd}
+            currentPeriodEnd={activeSubscription?.currentPeriodEnd?.toISOString() ?? null}
             triggerContent={upgradeTriggerContent}
             triggerClassName={upgradeTriggerClassName}
           />

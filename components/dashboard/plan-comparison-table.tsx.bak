@@ -42,7 +42,7 @@ export function PlanComparisonTable({
               i !== 0 ? "border-t border-surface-container-low" : "",
             ].join(" ")}
           >
-            <span className="text-body-small text-outline">{row.label}</span>
+            <span className="text-body-small text-on-surface">{row.label}</span>
             <span className="text-body-small font-semibold text-on-surface">
               {row.premiumValue}
             </span>
@@ -88,7 +88,7 @@ export function PlanComparisonTable({
             i !== 0 ? "border-t border-surface-container-low" : "",
           ].join(" ")}
         >
-          <span className="text-body-small text-outline">{row.label}</span>
+          <span className="text-body-small text-on-surface">{row.label}</span>
           <span className="w-16 text-center text-body-small text-on-surface-variant">
             {row.freeValue}
           </span>

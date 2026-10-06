@@ -12,10 +12,16 @@ export async function getActiveSubscription(userId: string) {
     select: {
       id: true,
       userId: true,
+      planId: true,
       status: true,
       cancelAtPeriodEnd: true,
+      scheduledPlanId: true,
+      scheduledInterval: true,
       currentPeriodStart: true,
       currentPeriodEnd: true,
+      plan: {
+        select: { id: true, name: true },
+      },
     },
   });
 }
@@ -39,12 +45,19 @@ export async function expireSubscriptionIfDue(subscription: {
   userId: string;
   status: string;
   currentPeriodEnd: Date | null;
+  scheduledPlanId?: string | null;
+  scheduledInterval?: string | null;
 }): Promise<boolean> {
   if (subscription.status !== "ACTIVE") return false;
   if (!subscription.currentPeriodEnd) return false;
   if (subscription.currentPeriodEnd > new Date()) return false;
 
   await prisma.$transaction(async (tx) => {
+    const fullSub = await tx.subscription.findUnique({
+      where: { id: subscription.id },
+      select: { scheduledPlanId: true, scheduledInterval: true },
+    });
+
     const updated = await tx.subscription.updateMany({
       where: { id: subscription.id, status: "ACTIVE" },
       data: { status: "EXPIRED" },
@@ -52,6 +65,51 @@ export async function expireSubscriptionIfDue(subscription: {
 
     if (updated.count === 0) {
       return;
+    }
+
+    const scheduledPlanId = fullSub?.scheduledPlanId ?? subscription.scheduledPlanId;
+    const scheduledInterval = fullSub?.scheduledInterval ?? subscription.scheduledInterval;
+
+    if (scheduledPlanId && (scheduledInterval === "monthly" || scheduledInterval === "yearly")) {
+      const scheduledPlan = await tx.plan.findUnique({
+        where: { id: scheduledPlanId, active: true },
+      });
+
+      if (scheduledPlan) {
+        const periodStart = subscription.currentPeriodEnd && subscription.currentPeriodEnd > new Date() ? subscription.currentPeriodEnd : new Date();
+        const periodEnd = new Date(periodStart);
+        if (scheduledInterval === "yearly") {
+          periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+        } else {
+          periodEnd.setMonth(periodEnd.getMonth() + 1);
+        }
+
+        await tx.subscription.create({
+          data: {
+            userId: subscription.userId,
+            planId: scheduledPlan.id,
+            provider: "FLUTTERWAVE",
+            status: "ACTIVE",
+            currentPeriodStart: periodStart,
+            currentPeriodEnd: periodEnd,
+          },
+        });
+
+        await tx.user.update({
+          where: { id: subscription.userId },
+          data: { subscriptionTier: "PREMIUM" },
+        });
+
+        await tx.paymentLog.create({
+          data: {
+            userId: subscription.userId,
+            event: "SCHEDULED_PLAN_ACTIVATED",
+            message: `Scheduled ${scheduledPlan.name} (${scheduledInterval}) plan activated following period end`,
+          },
+        });
+
+        return;
+      }
     }
 
     const otherActive = await tx.subscription.findFirst({

@@ -88,8 +88,19 @@ export async function getActivePlanById(planId: string) {
 
 export async function getUpgradeDialogData(): Promise<UpgradeDialogData> {
   const [freePlan, premiumPlan] = await Promise.all([
-    prisma.plan.findFirst({ where: { name: "FREE", active: true } }),
-    prisma.plan.findFirst({ where: { name: "PREMIUM", active: true } }),
+    prisma.plan.findFirst({
+      where: {
+        name: { equals: "FREE", mode: "insensitive" },
+        active: true,
+      },
+    }),
+    prisma.plan.findFirst({
+      where: {
+        NOT: { name: { equals: "FREE", mode: "insensitive" } },
+        active: true,
+      },
+      orderBy: { monthlyPrice: "asc" },
+    }),
   ]);
 
   if (!premiumPlan) {

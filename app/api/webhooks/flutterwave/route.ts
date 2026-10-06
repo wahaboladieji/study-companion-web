@@ -118,6 +118,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ received: true });
   }
 
+  // Payment provider confirmed success and amounts match
+  await prisma.paymentLog.create({
+    data: {
+      userId,
+      transactionId,
+      event: "CALLBACK_VERIFIED",
+      message: `Flutterwave confirmed payment successful (${verified.amountMinor} ${verified.currency})`,
+    },
+  });
+
   const periodStart = new Date();
   const periodEnd = new Date(periodStart);
   if (transaction.interval === "yearly") {
@@ -140,10 +150,30 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    const activeSub = await tx.subscription.findFirst({
+      where: { userId: transaction.userId, status: "ACTIVE" },
+      orderBy: { createdAt: "desc" },
+    });
+
+    let remainingMs = 0;
+    if (activeSub && activeSub.currentPeriodEnd && activeSub.currentPeriodEnd > new Date()) {
+      remainingMs = activeSub.currentPeriodEnd.getTime() - Date.now();
+    }
+
     await tx.subscription.updateMany({
       where: { userId: transaction.userId, status: "ACTIVE" },
       data: { status: "CANCELLED" },
     });
+
+    const periodStart = new Date();
+    const baseEnd = new Date(periodStart);
+    if (transaction.interval === "yearly") {
+      baseEnd.setFullYear(baseEnd.getFullYear() + 1);
+    } else {
+      baseEnd.setMonth(baseEnd.getMonth() + 1);
+    }
+
+    const periodEnd = new Date(baseEnd.getTime() + remainingMs);
 
     await tx.subscription.create({
       data: {
@@ -162,12 +192,15 @@ export async function POST(req: NextRequest) {
       data: { subscriptionTier: "PREMIUM" },
     });
 
+    const rolloverDays = Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
     await tx.paymentLog.create({
       data: {
         userId: transaction.userId,
         transactionId: transaction.id,
-        event: "WEBHOOK_VERIFICATION_SUCCESS",
-        message: "User successfully upgraded to PREMIUM",
+        event: "SUBSCRIPTION_FULFILLED",
+        message: rolloverDays > 0
+          ? `Subscription activated via webhook with ${rolloverDays} rollover days added from previous active plan`
+          : "Subscription created and user upgraded to PREMIUM via webhook",
       },
     });
   });

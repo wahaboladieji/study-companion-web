@@ -22,6 +22,9 @@ export type BillingOverview = {
     status: string;
     interval: SubscriptionInterval | null;
     cancelAtPeriodEnd: boolean;
+    scheduledPlanId: string | null;
+    scheduledInterval: string | null;
+    scheduledPlanName: string | null;
     currentPeriodStart: string | null;
     currentPeriodEnd: string | null;
   } | null;
@@ -40,6 +43,8 @@ export async function getBillingOverview(userId: string): Promise<BillingOvervie
         userId: true,
         status: true,
         cancelAtPeriodEnd: true,
+        scheduledPlanId: true,
+        scheduledInterval: true,
         currentPeriodStart: true,
         currentPeriodEnd: true,
       },
@@ -68,6 +73,15 @@ export async function getBillingOverview(userId: string): Promise<BillingOvervie
     }
   }
 
+  let scheduledPlanName: string | null = null;
+  if (subscription?.scheduledPlanId) {
+    const sPlan = await prisma.plan.findUnique({
+      where: { id: subscription.scheduledPlanId },
+      select: { name: true },
+    });
+    scheduledPlanName = sPlan?.name ?? null;
+  }
+
   return {
     plans,
     subscription: subscription
@@ -75,6 +89,9 @@ export async function getBillingOverview(userId: string): Promise<BillingOvervie
           status: subscription.status,
           interval: inferSubscriptionInterval(subscription),
           cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+          scheduledPlanId: subscription.scheduledPlanId,
+          scheduledInterval: subscription.scheduledInterval,
+          scheduledPlanName,
           currentPeriodStart: subscription.currentPeriodStart?.toISOString() ?? null,
           currentPeriodEnd: subscription.currentPeriodEnd?.toISOString() ?? null,
         }
@@ -89,6 +106,98 @@ export async function getBillingOverview(userId: string): Promise<BillingOvervie
       createdAt: tx.createdAt.toISOString(),
     })),
   };
+}
+
+export async function scheduleFutureSubscription(
+  userId: string,
+  planId: string,
+  interval: string
+): Promise<{ success: boolean; error?: string }> {
+  const subscription = await prisma.subscription.findFirst({
+    where: { userId, status: "ACTIVE" },
+    orderBy: { createdAt: "desc" },
+    take: 1,
+    select: {
+      id: true,
+      plan: { select: { name: true } },
+    },
+  });
+
+  if (!subscription) {
+    return {
+      success: false,
+      error: "You don't have an active subscription to modify.",
+    };
+  }
+
+  const targetPlan = await prisma.plan.findUnique({
+    where: { id: planId, active: true },
+  });
+
+  if (!targetPlan) {
+    return {
+      success: false,
+      error: "The requested plan is not available.",
+    };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.subscription.update({
+      where: { id: subscription.id },
+      data: {
+        scheduledPlanId: targetPlan.id,
+        scheduledInterval: interval,
+      },
+    });
+
+    await tx.paymentLog.create({
+      data: {
+        userId,
+        event: "SUBSCRIPTION_CHANGE_SCHEDULED",
+        message: `User scheduled change to ${targetPlan.name} (${interval}) following current period end`,
+      },
+    });
+  });
+
+  return { success: true };
+}
+
+export async function clearScheduledSubscription(
+  userId: string
+): Promise<{ success: boolean; error?: string }> {
+  const subscription = await prisma.subscription.findFirst({
+    where: { userId, status: "ACTIVE" },
+    orderBy: { createdAt: "desc" },
+    take: 1,
+    select: { id: true },
+  });
+
+  if (!subscription) {
+    return {
+      success: false,
+      error: "You don't have an active subscription.",
+    };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.subscription.update({
+      where: { id: subscription.id },
+      data: {
+        scheduledPlanId: null,
+        scheduledInterval: null,
+      },
+    });
+
+    await tx.paymentLog.create({
+      data: {
+        userId,
+        event: "SCHEDULED_SUBSCRIPTION_CLEARED",
+        message: "User cleared scheduled subscription change",
+      },
+    });
+  });
+
+  return { success: true };
 }
 
 export async function cancelSubscription(

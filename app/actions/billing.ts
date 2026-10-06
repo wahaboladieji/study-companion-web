@@ -9,6 +9,8 @@ import {
   getBillingOverview,
   cancelSubscription,
   resumeSubscription,
+  scheduleFutureSubscription,
+  clearScheduledSubscription,
   type BillingOverview,
 } from "@/services/billing";
 import {
@@ -124,6 +126,55 @@ export async function createCheckoutAction(
   }
 }
 
+export type ScheduleCheckoutResult = {
+  success: boolean;
+  error?: string;
+};
+
+export async function scheduleCheckoutAction(input: {
+  planId: string;
+  interval: "monthly" | "yearly";
+  csrfToken: string;
+}): Promise<ScheduleCheckoutResult> {
+  if (!(await validateCsrfToken(input.csrfToken))) {
+    return { success: false, error: CSRF_FAILURE };
+  }
+
+  const user = await getCurrentUser();
+  if (!user) {
+    return { success: false, error: AUTH_FAILURE };
+  }
+
+  const result = await scheduleFutureSubscription(user.id, input.planId, input.interval);
+  if (!result.success) {
+    return result;
+  }
+
+  revalidateDashboardCache();
+  return { success: true };
+}
+
+export async function clearScheduledChangeAction(input: {
+  csrfToken: string;
+}): Promise<ScheduleCheckoutResult> {
+  if (!(await validateCsrfToken(input.csrfToken))) {
+    return { success: false, error: CSRF_FAILURE };
+  }
+
+  const user = await getCurrentUser();
+  if (!user) {
+    return { success: false, error: AUTH_FAILURE };
+  }
+
+  const result = await clearScheduledSubscription(user.id);
+  if (!result.success) {
+    return result;
+  }
+
+  revalidateDashboardCache();
+  return { success: true };
+}
+
 export async function verifyPaymentAction(
   input: { txRef: string; csrfToken: string }
 ): Promise<VerifyPaymentResult> {
@@ -168,7 +219,16 @@ export async function verifyPaymentAction(
   let verified;
   try {
     verified = await verifyTransaction(input.txRef);
-  } catch {
+  } catch (verifyError) {
+    console.error("Callback verification error:", verifyError);
+    await prisma.paymentLog.create({
+      data: {
+        userId: user.id,
+        transactionId: transaction.id,
+        event: "CALLBACK_VERIFICATION_FAILED",
+        message: "Failed to verify transaction via Flutterwave API",
+      },
+    });
     return {
       success: false,
       error: "We could not verify the payment. Please try again.",
@@ -180,6 +240,14 @@ export async function verifyPaymentAction(
       where: { id: transaction.id },
       data: { status: "FAILED" },
     });
+    await prisma.paymentLog.create({
+      data: {
+        userId: user.id,
+        transactionId: transaction.id,
+        event: "CALLBACK_STATUS_FAILED",
+        message: `Payment status was ${verified.status}`,
+      },
+    });
     return {
       success: false,
       error: "The payment did not complete. Please try again.",
@@ -190,11 +258,29 @@ export async function verifyPaymentAction(
     verified.amountMinor !== transaction.amountMinor ||
     verified.currency !== transaction.currency
   ) {
+    await prisma.paymentLog.create({
+      data: {
+        userId: user.id,
+        transactionId: transaction.id,
+        event: "CALLBACK_AMOUNT_MISMATCH",
+        message: `Expected ${transaction.amountMinor} ${transaction.currency}, got ${verified.amountMinor} ${verified.currency}`,
+      },
+    });
     return {
       success: false,
       error: "The payment details did not match. Please contact support.",
     };
   }
+
+  // Payment provider confirmed success and amounts match
+  await prisma.paymentLog.create({
+    data: {
+      userId: user.id,
+      transactionId: transaction.id,
+      event: "CALLBACK_VERIFIED",
+      message: `Flutterwave confirmed payment successful (${verified.amountMinor} ${verified.currency})`,
+    },
+  });
 
   const periodStart = new Date();
   const periodEnd = new Date(periodStart);
@@ -221,10 +307,30 @@ export async function verifyPaymentAction(
         },
       });
 
+      const activeSub = await tx.subscription.findFirst({
+        where: { userId: transaction.userId, status: "ACTIVE" },
+        orderBy: { createdAt: "desc" },
+      });
+
+      let remainingMs = 0;
+      if (activeSub && activeSub.currentPeriodEnd && activeSub.currentPeriodEnd > new Date()) {
+        remainingMs = activeSub.currentPeriodEnd.getTime() - Date.now();
+      }
+
       await tx.subscription.updateMany({
         where: { userId: transaction.userId, status: "ACTIVE" },
         data: { status: "CANCELLED" },
       });
+
+      const periodStart = new Date();
+      const baseEnd = new Date(periodStart);
+      if (transaction.interval === "yearly") {
+        baseEnd.setFullYear(baseEnd.getFullYear() + 1);
+      } else {
+        baseEnd.setMonth(baseEnd.getMonth() + 1);
+      }
+
+      const periodEnd = new Date(baseEnd.getTime() + remainingMs);
 
       await tx.subscription.create({
         data: {
@@ -242,8 +348,29 @@ export async function verifyPaymentAction(
         where: { id: transaction.userId },
         data: { subscriptionTier: "PREMIUM" },
       });
+
+      const rolloverDays = Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
+      await tx.paymentLog.create({
+        data: {
+          userId: transaction.userId,
+          transactionId: transaction.id,
+          event: "SUBSCRIPTION_FULFILLED",
+          message: rolloverDays > 0
+            ? `Subscription activated via callback with ${rolloverDays} rollover days added from previous active plan`
+            : "Subscription created and user upgraded to PREMIUM via callback",
+        },
+      });
     });
-  } catch {
+  } catch (fulfillError) {
+    console.error("Subscription fulfillment error:", fulfillError);
+    await prisma.paymentLog.create({
+      data: {
+        userId: user.id,
+        transactionId: transaction.id,
+        event: "SUBSCRIPTION_FULFILLMENT_FAILED",
+        message: "Database transaction to activate subscription failed",
+      },
+    });
     return {
       success: false,
       error: "We could not activate your subscription. Please contact support.",

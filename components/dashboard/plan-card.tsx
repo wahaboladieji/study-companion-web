@@ -1,6 +1,6 @@
 "use client";
 
-import { Check } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
@@ -12,6 +12,7 @@ export function PlanCard({
   perLabel,
   badge,
   isCurrent,
+  isLoading,
   action,
   onAction,
 }: {
@@ -20,6 +21,7 @@ export function PlanCard({
   perLabel: string;
   badge?: string;
   isCurrent: boolean;
+  isLoading?: boolean;
   action: PlanAction | null;
   onAction: () => void;
 }) {
@@ -28,48 +30,65 @@ export function PlanCard({
   return (
     <div
       className={cn(
-        "flex flex-col rounded-xl border p-[var(--spacing-300)]",
+        "relative flex flex-col overflow-hidden rounded-xl border p-[1.25rem] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm",
         isCurrent
-          ? "border-primary bg-primary-container-light"
+          ? "border-primary bg-primary/5 ring-1 ring-primary"
           : "border-surface-container-high bg-surface",
-        unavailable && "opacity-60"
+        unavailable && "opacity-60 grayscale hover:translate-y-0 hover:shadow-none"
       )}
     >
-      <div className="flex items-center justify-between gap-[var(--spacing-100)]">
-        <span className="text-label-medium font-medium text-on-surface-variant">{label}</span>
-        {badge && !isCurrent && (
-          <span className="rounded-full bg-primary px-[var(--spacing-100)] py-px text-label-small font-semibold text-on-primary">
-            {badge}
-          </span>
+      {badge && !isCurrent && (
+        <div className="absolute right-0 top-0 rounded-bl-lg bg-success px-[var(--spacing-150)] py-[var(--spacing-50)] text-label-small font-bold tracking-wide text-on-success shadow-sm" style={{ fontSize: "10px" }}>
+          {badge}
+        </div>
+      )}
+
+      <div className="flex flex-col gap-[var(--spacing-50)]">
+        <span
+          className={cn(
+            "text-label-small font-bold uppercase tracking-wider",
+            isCurrent ? "text-primary" : "text-on-surface-variant"
+          )}
+        >
+          {label}
+        </span>
+      </div>
+
+      <div className="mt-[var(--spacing-150)] flex-1">
+        {unavailable ? (
+          <p className="text-body-medium text-on-surface-variant">Not available</p>
+        ) : (
+          <div className="flex flex-col">
+            <span className="text-title-large font-bold tracking-tight text-on-surface">
+              {priceLabel}
+            </span>
+            <span className="text-body-small font-medium text-[#999999]">
+              {perLabel}
+            </span>
+          </div>
         )}
       </div>
 
-      {unavailable ? (
-        <p className="mt-[var(--spacing-150)] text-body-medium text-on-surface-variant">
-          Not available
-        </p>
-      ) : (
-        <p className="mt-[var(--spacing-150)] flex items-baseline gap-[var(--spacing-50)] text-title-medium font-semibold text-on-surface">
-          {priceLabel}
-          <span className="text-body-small font-normal text-on-surface-variant">{perLabel}</span>
-        </p>
-      )}
-
-      <div className="mt-auto pt-[var(--spacing-200)]">
+      <div className="mt-[var(--spacing-200)]">
         {isCurrent ? (
-          <span className="flex w-full items-center justify-center gap-[var(--spacing-50)] rounded-md bg-primary px-[var(--spacing-100)] py-[var(--spacing-100)] text-label-medium font-semibold text-on-primary">
-            <Check className="h-4 w-4" aria-hidden="true" />
+          <div className="flex w-full items-center justify-center gap-[var(--spacing-50)] rounded-lg bg-primary/10 px-[var(--spacing-150)] py-[var(--spacing-100)] text-label-small font-bold text-primary">
+            <Check className="h-3 w-3" aria-hidden="true" />
             Current plan
-          </span>
+          </div>
         ) : action ? (
           <Button
             type="button"
             variant={action === "downgrade" ? "outline" : "primary"}
             size="sm"
-            className="w-full"
+            disabled={isLoading}
+            className={cn(
+              "w-full transition-all flex items-center justify-center gap-[var(--spacing-100)]",
+              action === "upgrade" && "hover:shadow-sm"
+            )}
             onClick={onAction}
           >
-            {action === "upgrade" ? "Upgrade plan" : "Downgrade plan"}
+            {isLoading && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+            {!isLoading && (action === "upgrade" ? "Upgrade plan" : "Downgrade plan")}
           </Button>
         ) : null}
       </div>
